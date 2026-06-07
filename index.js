@@ -957,11 +957,24 @@ async function postStartGuide(guild, summary) {
 }
 
 async function handleRules(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can post the rules embed.");
+  if (!isModerator(message.member)) {
+    await message.reply({ embeds: [buildRulesEmbed()] }).catch(() => {});
+    return;
+  }
 
   const channel = findChannel(message.guild, "rules") || message.channel;
-  await channel.send({ embeds: [buildRulesEmbed()] });
-  await message.reply(`Rules embed posted in ${channel}.`).catch(() => {});
+  const sent = await channel.send({ embeds: [buildRulesEmbed()] }).then(() => true).catch(async (error) => {
+    console.error("Could not post rules embed", error);
+    await message.channel.send({
+      content: `I could not post in ${channel}. Check my **Send Messages** and **Embed Links** permissions there.`,
+      embeds: [buildRulesEmbed()]
+    }).catch(() => {});
+    return false;
+  });
+
+  if (sent && channel.id !== message.channel.id) {
+    await message.reply(`Rules embed posted in ${channel}.`).catch(() => {});
+  }
 }
 
 async function postRulesEmbed(guild, summary) {
