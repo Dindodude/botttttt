@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ActivityType,
   ButtonBuilder,
   ButtonStyle,
@@ -183,7 +184,6 @@ const STRUCTURE = [
 const TICKET_TYPES = {
   bug: "Bug Report",
   report: "Player Report",
-  appeal: "Ban Appeal",
   support: "Support",
   partnership: "Partnership"
 };
@@ -258,6 +258,13 @@ client.on("messageCreate", async (message) => {
     if (command === "leaderboard") return handleLeaderboard(message);
     if (command === "analytics") return handleAnalytics(message);
     if (command === "serverstats") return handleServerStats(message);
+    if (command === "staffstats") return handleStaffStats(message);
+    if (command === "givepoint") return handleGivePoint(message, args);
+    if (command === "testerleaderboard") return handleTesterLeaderboard(message);
+    if (command === "testerstats" || command.startsWith("testerstats")) return handleTesterStats(message);
+    if (command === "claimticket") return handleClaimTicket(message);
+    if (command === "add") return handleTicketAdd(message);
+    if (command === "remove") return handleTicketRemove(message);
     if (command === "warn") return handleWarn(message, args);
     if (command === "warnings") return handleWarnings(message);
     if (command === "punish") return handlePunish(message, args);
@@ -1143,8 +1150,9 @@ async function handleCommands(message) {
         .addFields(
           field("Setup", "`!krupdate`, `!rolesetup`, `!rules`"),
           field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
-          field("Support", "`!ticketpanel`"),
-          field("Moderation", "`!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`")
+          field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
+          field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
+          field("Moderation", "`!staffstats`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`")
         )
     ]
   });
@@ -1158,7 +1166,9 @@ async function handleHelp(message) {
           field("General Commands", "`!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
           field("Support Commands", "`!ticketpanel`"),
           field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
-          field("Moderation Commands", "`!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
+          field("Ticket Commands", "`!claimticket`, `!add @user`, `!remove @user`"),
+          field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
+          field("Moderation Commands", "`!staffstats`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
         )
     ]
   });
@@ -1246,6 +1256,14 @@ async function handleTicketButton(interaction) {
   });
 
   data.tickets[`${interaction.user.id}:${type}`] = channel.id;
+  data.ticketMeta ||= {};
+  data.ticketMeta[channel.id] = {
+    ownerId: interaction.user.id,
+    type,
+    claimedBy: null,
+    createdAt: Date.now(),
+    closedAt: null
+  };
   data.analytics.tickets += 1;
   saveGuildData(interaction.guild.id, data);
 
@@ -1260,14 +1278,169 @@ async function handleTicketButton(interaction) {
 
 async function closeTicket(interaction) {
   if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can close tickets.", ephemeral: true });
+  await saveTicketTranscript(interaction.channel, interaction.user, "closed");
   await interaction.channel.permissionOverwrites.edit(interaction.customId.split(":")[1], { SendMessages: false }).catch(() => {});
+  const data = getGuildData(interaction.guild.id);
+  data.ticketMeta ||= {};
+  if (data.ticketMeta[interaction.channel.id]) data.ticketMeta[interaction.channel.id].closedAt = Date.now();
+  incrementStaffStat(interaction.guild.id, interaction.user.id, "closedTickets", 1);
+  saveGuildData(interaction.guild.id, data);
   await interaction.reply("Ticket closed.");
 }
 
 async function deleteTicket(interaction) {
   if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can delete tickets.", ephemeral: true });
+  await saveTicketTranscript(interaction.channel, interaction.user, "deleted");
+  const data = getGuildData(interaction.guild.id);
+  data.ticketMeta ||= {};
+  delete data.ticketMeta[interaction.channel.id];
+  for (const [key, channelId] of Object.entries(data.tickets || {})) {
+    if (channelId === interaction.channel.id) delete data.tickets[key];
+  }
+  incrementStaffStat(interaction.guild.id, interaction.user.id, "deletedTickets", 1);
+  saveGuildData(interaction.guild.id, data);
   await interaction.reply("Deleting ticket...");
   await interaction.channel.delete("Ticket deleted").catch(() => {});
+}
+
+async function handleClaimTicket(message) {
+  if (!isStaff(message.member)) return message.reply("Only staff can claim tickets.");
+  const meta = getTicketMetaForChannel(message.guild.id, message.channel.id);
+  if (!meta) return message.reply("This command only works inside a ticket channel.");
+  if (meta.claimedBy) return message.reply(`This ticket is already claimed by <@${meta.claimedBy}>.`);
+
+  const data = getGuildData(message.guild.id);
+  data.ticketMeta[message.channel.id].claimedBy = message.author.id;
+  incrementStaffStat(message.guild.id, message.author.id, "claimedTickets", 1);
+  saveGuildData(message.guild.id, data);
+  await message.channel.send(`${message.author} claimed this ticket.`);
+}
+
+async function handleTicketAdd(message) {
+  if (!isStaff(message.member)) return message.reply("Only staff can add people to tickets.");
+  const member = message.mentions.members.first();
+  if (!member) return message.reply("Usage: `!add @user`");
+  if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
+
+  await message.channel.permissionOverwrites.edit(member.id, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  });
+  await message.channel.send(`${member} was added to this ticket by ${message.author}.`);
+}
+
+async function handleTicketRemove(message) {
+  if (!isStaff(message.member)) return message.reply("Only staff can remove people from tickets.");
+  const member = message.mentions.members.first();
+  if (!member) return message.reply("Usage: `!remove @user`");
+  if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
+
+  await message.channel.permissionOverwrites.delete(member.id).catch(() => {});
+  await message.channel.send(`${member} was removed from this ticket by ${message.author}.`);
+}
+
+async function handleStaffStats(message) {
+  if (!isStaff(message.member)) return message.reply("Only staff can view staff stats.");
+  const target = message.mentions.users.first() || message.author;
+  const stats = getGuildData(message.guild.id).staffStats?.[target.id] || {};
+
+  await message.reply({
+    embeds: [
+      baseEmbed(`Staff Stats - ${target.tag}`)
+        .addFields(
+          field("Claimed Tickets", stats.claimedTickets || 0, true),
+          field("Closed Tickets", stats.closedTickets || 0, true),
+          field("Deleted Tickets", stats.deletedTickets || 0, true),
+          field("Punishments", stats.punishments || 0, true)
+        )
+    ]
+  });
+}
+
+async function handleGivePoint(message, args) {
+  if (!isStaff(message.member)) return message.reply("Only staff can give tester points.");
+  const user = message.mentions.users.first();
+  const amount = Number(args.find((arg) => /^-?\d+$/.test(arg)) || 1);
+  const reason = args.filter((arg) => !arg.startsWith("<@") && !/^-?\d+$/.test(arg)).join(" ") || "Tester contribution";
+  if (!user || Number.isNaN(amount)) return message.reply("Usage: `!givepoint @tester [amount] [reason]`");
+
+  const data = getGuildData(message.guild.id);
+  data.testerPoints ||= {};
+  const stats = data.testerPoints[user.id] ||= { points: 0, history: [] };
+  stats.points += amount;
+  stats.history.push({ amount, reason, staffId: message.author.id, at: Date.now() });
+  saveGuildData(message.guild.id, data);
+
+  await logTo(message.guild, "logs", "Tester Point Given", [
+    field("Tester", `${user.tag} (${user.id})`),
+    field("Points", amount, true),
+    field("Total", stats.points, true),
+    field("Staff", message.author.tag),
+    field("Reason", reason)
+  ]);
+  await message.reply(`Gave **${amount}** tester point(s) to **${user.tag}**. Total: **${stats.points}**.`);
+}
+
+async function handleTesterLeaderboard(message) {
+  const data = getGuildData(message.guild.id);
+  const leaders = Object.entries(data.testerPoints || {})
+    .sort(([, a], [, b]) => (b.points || 0) - (a.points || 0))
+    .slice(0, 10);
+
+  await message.reply({
+    embeds: [
+      baseEmbed("Tester Leaderboard")
+        .setDescription(leaders.map(([userId, stats], index) => `${index + 1}. <@${userId}> - **${stats.points || 0}** points`).join("\n") || "No tester points yet.")
+    ]
+  });
+}
+
+async function handleTesterStats(message) {
+  const user = message.mentions.users.first() || message.author;
+  const stats = getGuildData(message.guild.id).testerPoints?.[user.id] || { points: 0, history: [] };
+
+  await message.reply({
+    embeds: [
+      baseEmbed(`Tester Stats - ${user.tag}`)
+        .addFields(
+          field("Points", stats.points || 0, true),
+          field("Recent Points", (stats.history || []).slice(-5).map((entry) => `${entry.amount > 0 ? "+" : ""}${entry.amount} - ${entry.reason} (<@${entry.staffId}>)`).join("\n") || "No point history.")
+        )
+    ]
+  });
+}
+
+function getTicketMetaForChannel(guildId, channelId) {
+  return getGuildData(guildId).ticketMeta?.[channelId] || null;
+}
+
+async function saveTicketTranscript(channel, staffUser, action) {
+  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return;
+
+  const lines = [...messages.values()]
+    .reverse()
+    .map((message) => `[${message.createdAt.toISOString()}] ${message.author.tag}: ${message.content || "[no text content]"}${message.attachments.size ? ` Attachments: ${message.attachments.map((attachment) => attachment.url).join(", ")}` : ""}`);
+  const transcript = [
+    `Transcript for #${channel.name}`,
+    `Action: ${action}`,
+    `Staff: ${staffUser.tag} (${staffUser.id})`,
+    `Created: ${new Date().toISOString()}`,
+    "",
+    ...lines
+  ].join("\n");
+  const attachment = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
+    name: `transcript-${channel.name}-${Date.now()}.txt`
+  });
+  const logChannel = findChannel(channel.guild, "logs") || findChannel(channel.guild, "mod-logs");
+
+  if (logChannel) {
+    await logChannel.send({
+      embeds: [baseEmbed("Ticket Transcript").addFields(field("Ticket", `${channel.name}`, true), field("Action", action, true), field("Staff", staffUser.tag, true))],
+      files: [attachment]
+    }).catch(() => {});
+  }
 }
 
 async function handleBugReport(message) {
@@ -1601,8 +1774,20 @@ async function handleTimeout(message, args) {
 async function logModeration(guild, action, user, moderator, reason) {
   const data = getGuildData(guild.id);
   data.analytics.punishments += 1;
+  const staff = data.staffStats?.[moderator.id] || { claimedTickets: 0, closedTickets: 0, deletedTickets: 0, punishments: 0 };
+  data.staffStats ||= {};
+  staff.punishments = (staff.punishments || 0) + 1;
+  data.staffStats[moderator.id] = staff;
   saveGuildData(guild.id, data);
   await logTo(guild, "mod-logs", action, [field("User", `${user.tag} (${user.id})`), field("Moderator", `${moderator.tag}`), field("Reason", reason)]);
+}
+
+function incrementStaffStat(guildId, userId, key, amount = 1) {
+  const data = getGuildData(guildId);
+  data.staffStats ||= {};
+  const stats = data.staffStats[userId] ||= { claimedTickets: 0, closedTickets: 0, deletedTickets: 0, punishments: 0 };
+  stats[key] = (stats[key] || 0) + amount;
+  saveGuildData(guildId, data);
 }
 
 function normalizePunishmentRule(value = "") {
@@ -1743,6 +1928,7 @@ async function checkExpiredTempBans() {
 }
 
 async function logPunishment(guild, user, moderator, ruleKey, punishment, reason, evidence, deleted, count) {
+  incrementStaffStat(guild.id, moderator.id, "punishments", 1);
   await logTo(guild, "mod-logs", "Punishment Applied", [
     field("User", `${user.tag} (${user.id})`),
     field("Moderator", moderator.tag),
