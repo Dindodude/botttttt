@@ -28,6 +28,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
+const BOT_VERSION = "2026-06-06-rules-punishments-v2";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -239,6 +240,7 @@ client.on("messageCreate", async (message) => {
 
   try {
     if (command === "ping") return handlePing(message);
+    if (command === "version") return handleVersion(message);
     if (command === "commands") return handleCommands(message);
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
@@ -1124,7 +1126,11 @@ async function sendJoinLog(member, title) {
 }
 
 async function handlePing(message) {
-  await message.reply(`Pong. Bot is online. Prefix is \`${(getGuildSettings(message.guild.id) || {}).prefix || PREFIX}\`.`);
+  await message.reply(`Pong. Bot is online. Version: \`${BOT_VERSION}\`. Prefix is \`${(getGuildSettings(message.guild.id) || {}).prefix || PREFIX}\`.`);
+}
+
+async function handleVersion(message) {
+  await message.reply(`Running **${BRAND}** bot version \`${BOT_VERSION}\`.`);
 }
 
 async function handleCommands(message) {

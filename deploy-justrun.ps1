@@ -49,6 +49,6 @@ if ($existingRemotes -contains "justrun") {
 }
 
 git remote add justrun $RemoteUrl
-git push justrun $PushRef
+git push -u justrun $PushRef --force
 
 Write-Host "Deploy push complete."
