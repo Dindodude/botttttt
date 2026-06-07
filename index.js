@@ -218,6 +218,8 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Bot version: ${BOT_VERSION}`);
+  console.log(`Data directory: ${DATA_DIR}`);
   rotateStatus();
   checkExpiredTempBans();
   setInterval(checkExpiredTempBans, 10 * 60 * 1000).unref();
