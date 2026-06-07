@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-start-here-refresh";
+const BOT_VERSION = "2026-06-07-start-here-command";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -284,6 +284,7 @@ client.on("messageCreate", async (message) => {
     if (command === "autorole") return handleAutoRole(message, args);
     if (command === "automod") return handleAutoModCommand(message, args);
     if (command === "badword") return handleBadWordCommand(message, args);
+    if ((command === "start" && args[0]?.toLowerCase() === "here") || command === "starthere") return handleStartHereCommand(message);
     if (command === "rules") return handleRules(message);
     if (command === "help") return handleHelp(message);
     if (command === "suggest") return handleSuggest(message, args);
@@ -925,6 +926,25 @@ async function handleBadWordCommand(message, args) {
   return message.reply(current.includes(phrase) ? `Removed \`${phrase}\` from the bad word filter.` : `\`${phrase}\` was not in the bad word filter.`);
 }
 
+async function handleStartHereCommand(message) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!start here`.");
+
+  const summary = { created: [], skipped: [], permissions: [], errors: [] };
+  await postStartGuide(message.guild, summary);
+
+  await message.reply({
+    embeds: [
+      baseEmbed("Start Here Guide")
+        .setDescription("The Start Here guide has been created or refreshed.")
+        .addFields(
+          field("Created", list(summary.created)),
+          field("Updated", list(summary.permissions)),
+          field("Errors", list(summary.errors))
+        )
+    ]
+  });
+}
+
 async function applyRoleSetup(guild, summary) {
   try {
     await guild.roles.everyone.setPermissions(EVERYONE_PERMS, "Kaiju Reincarnated safe everyone permissions");
@@ -1404,7 +1424,7 @@ async function handleCommands(message) {
       baseEmbed(`${BRAND} Commands`)
         .setDescription("If this message appears, prefix commands are working.")
         .addFields(
-          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!rules`"),
+          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!rules`"),
           field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
           field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
           field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
