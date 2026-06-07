@@ -29,7 +29,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-06-rules-punishments-v2";
+const BOT_VERSION = "2026-06-07-autorole-control";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -141,6 +141,16 @@ const CONTRIBUTOR_PERMS = [
   PermissionFlagsBits.AttachFiles,
   PermissionFlagsBits.AddReactions
 ];
+const DANGEROUS_AUTO_ROLE_PERMS = [
+  PermissionFlagsBits.Administrator,
+  PermissionFlagsBits.ManageChannels,
+  PermissionFlagsBits.ManageRoles,
+  PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.KickMembers,
+  PermissionFlagsBits.BanMembers,
+  PermissionFlagsBits.ModerateMembers,
+  PermissionFlagsBits.MentionEveryone
+];
 
 const STRUCTURE = [
   {
@@ -246,6 +256,7 @@ client.on("messageCreate", async (message) => {
     if (command === "commands") return handleCommands(message);
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
+    if (command === "autorole") return handleAutoRole(message, args);
     if (command === "rules") return handleRules(message);
     if (command === "help") return handleHelp(message);
     if (command === "suggest") return handleSuggest(message, args);
@@ -293,7 +304,8 @@ client.on("guildMemberAdd", async (member) => {
   saveGuildData(member.guild.id, data);
 
   await sendJoinLog(member, "Member Joined");
-  await assignJoinRoles(member);
+  if (settings.autoRoleEnabled !== false) await assignJoinRoles(member, settings);
+  else await logTo(member.guild, "join-logs", "Auto Role Skipped", [field("User", `${member}`), field("Reason", "Auto role is disabled.")]);
   await sendWelcome(member);
   await sendNewMemberDm(member);
 });
@@ -649,6 +661,7 @@ async function handleKrUpdate(message) {
     joinLogsChannelId: joinLogs?.id || null,
     autoRoleId: player?.id || null,
     announcementRoleId: announcement?.id || null,
+    autoRoleIds: [player?.id, announcement?.id].filter(Boolean),
     autoRoleEnabled: true,
     autoWelcomeEnabled: true,
     gameName: BRAND
@@ -696,6 +709,95 @@ async function handleRoleSetup(message) {
         )
     ]
   });
+}
+
+async function handleAutoRole(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!autorole`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const action = (args.shift() || "status").toLowerCase();
+
+  if (action === "status") {
+    const roleIds = getConfiguredAutoRoleIds(message.guild, settings);
+    return message.reply({
+      embeds: [
+        baseEmbed("Auto Role Settings")
+          .addFields(
+            field("Status", settings.autoRoleEnabled === false ? "Disabled" : "Enabled", true),
+            field("Join Roles", roleIds.length ? roleIds.map((id) => `<@&${id}>`).join(", ") : "None"),
+            field("Commands", "`!autorole off`, `!autorole on`, `!autorole clear`, `!autorole set @role @role2`, `!autorole add @role`, `!autorole remove @role`")
+          )
+      ]
+    });
+  }
+
+  if (["off", "disable", "disabled"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, autoRoleEnabled: false });
+    return message.reply("Auto role is now **off**. New members will not receive Player or Announcement Ping from the bot.");
+  }
+
+  if (["on", "enable", "enabled"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, autoRoleEnabled: true });
+    return message.reply("Auto role is now **on**. Use `!autorole status` to check which roles will be assigned.");
+  }
+
+  if (action === "clear") {
+    saveGuildSettings(message.guild.id, {
+      ...settings,
+      autoRoleEnabled: true,
+      autoRoleIds: [],
+      autoRoleId: null,
+      announcementRoleId: null
+    });
+    return message.reply("Auto role list cleared. New members will receive **no** roles unless you run `!autorole set @role`.");
+  }
+
+  if (action === "default") {
+    const roles = AUTO_JOIN_ROLES.map((name) => findRole(message.guild, name)).filter(Boolean);
+    saveGuildSettings(message.guild.id, {
+      ...settings,
+      autoRoleEnabled: true,
+      autoRoleIds: roles.map((role) => role.id),
+      autoRoleId: roles.find((role) => role.name === ROLE_NAMES.player)?.id || null,
+      announcementRoleId: roles.find((role) => role.name === ROLE_NAMES.announcement)?.id || null
+    });
+    return message.reply(`Auto role restored to default: ${roles.map((role) => `<@&${role.id}>`).join(", ") || "None found"}.`);
+  }
+
+  if (!["set", "add", "remove"].includes(action)) {
+    return message.reply("Usage: `!autorole status`, `!autorole off`, `!autorole on`, `!autorole clear`, `!autorole set @role @role2`, `!autorole add @role`, `!autorole remove @role`.");
+  }
+
+  const mentionedRoles = [...message.mentions.roles.values()];
+  if (!mentionedRoles.length) return message.reply("Please mention at least one role. Example: `!autorole set @Player @Announcement Ping`");
+
+  const unsafe = mentionedRoles.filter((role) => isUnsafeAutoRole(role));
+  if (unsafe.length) {
+    return message.reply(`I will not use unsafe auto roles: ${unsafe.map((role) => `<@&${role.id}>`).join(", ")}. Auto roles cannot have admin, moderation, manage, or mass-ping permissions.`);
+  }
+
+  const botMember = message.guild.members.me;
+  const tooHigh = mentionedRoles.filter((role) => botMember.roles.highest.comparePositionTo(role) <= 0);
+  if (tooHigh.length) {
+    return message.reply(`I cannot assign these roles because my bot role is not above them: ${tooHigh.map((role) => `<@&${role.id}>`).join(", ")}.`);
+  }
+
+  const current = getConfiguredAutoRoleIds(message.guild, settings);
+  const mentionedIds = mentionedRoles.map((role) => role.id);
+  let nextIds = mentionedIds;
+
+  if (action === "add") nextIds = [...new Set([...current, ...mentionedIds])];
+  if (action === "remove") nextIds = current.filter((id) => !mentionedIds.includes(id));
+
+  saveGuildSettings(message.guild.id, {
+    ...settings,
+    autoRoleEnabled: true,
+    autoRoleIds: nextIds,
+    autoRoleId: nextIds[0] || null,
+    announcementRoleId: nextIds[1] || null
+  });
+
+  return message.reply(`Auto role updated. New join roles: ${nextIds.length ? nextIds.map((id) => `<@&${id}>`).join(", ") : "None"}.`);
 }
 
 async function applyRoleSetup(guild, summary) {
@@ -1092,17 +1194,37 @@ async function handleGuideButton(interaction) {
   await interaction.reply({ content: text, ephemeral: true });
 }
 
-async function assignJoinRoles(member) {
-  for (const roleName of AUTO_JOIN_ROLES) {
-    const role = findRole(member.guild, roleName);
+function isUnsafeAutoRole(role) {
+  return role.permissions.any(DANGEROUS_AUTO_ROLE_PERMS);
+}
+
+function getConfiguredAutoRoleIds(guild, settings = {}) {
+  if (Array.isArray(settings.autoRoleIds)) return settings.autoRoleIds.filter((id) => guild.roles.cache.has(id));
+
+  const savedIds = [settings.autoRoleId, settings.announcementRoleId].filter((id) => id && guild.roles.cache.has(id));
+  if (savedIds.length) return savedIds;
+
+  return AUTO_JOIN_ROLES.map((roleName) => findRole(guild, roleName)?.id).filter(Boolean);
+}
+
+async function assignJoinRoles(member, settings = {}) {
+  const roleIds = getConfiguredAutoRoleIds(member.guild, settings);
+
+  for (const roleId of roleIds) {
+    const role = member.guild.roles.cache.get(roleId);
     if (!role) continue;
 
-    if (!member.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles) || member.guild.members.me.roles.highest.comparePositionTo(role) <= 0) {
-      await logTo(member.guild, "join-logs", "Auto Role Failed", [field("User", `${member}`), field("Role", roleName), field("Reason", "Bot role is not above this role or lacks Manage Roles.")]);
+    if (isUnsafeAutoRole(role)) {
+      await logTo(member.guild, "join-logs", "Auto Role Failed", [field("User", `${member}`), field("Role", role.name), field("Reason", "Role has unsafe permissions and was blocked.")]);
       continue;
     }
 
-    await member.roles.add(role, "Auto role on join").catch((error) => logTo(member.guild, "join-logs", "Auto Role Failed", [field("User", `${member}`), field("Role", roleName), field("Reason", error.message)]));
+    if (!member.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles) || member.guild.members.me.roles.highest.comparePositionTo(role) <= 0) {
+      await logTo(member.guild, "join-logs", "Auto Role Failed", [field("User", `${member}`), field("Role", role.name), field("Reason", "Bot role is not above this role or lacks Manage Roles.")]);
+      continue;
+    }
+
+    await member.roles.add(role, "Auto role on join").catch((error) => logTo(member.guild, "join-logs", "Auto Role Failed", [field("User", `${member}`), field("Role", role.name), field("Reason", error.message)]));
   }
 }
 
@@ -1148,7 +1270,7 @@ async function handleCommands(message) {
       baseEmbed(`${BRAND} Commands`)
         .setDescription("If this message appears, prefix commands are working.")
         .addFields(
-          field("Setup", "`!krupdate`, `!rolesetup`, `!rules`"),
+          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!rules`"),
           field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
           field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
           field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
@@ -1168,7 +1290,7 @@ async function handleHelp(message) {
           field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
           field("Ticket Commands", "`!claimticket`, `!add @user`, `!remove @user`"),
           field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation Commands", "`!staffstats`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
+          field("Moderation Commands", "`!staffstats`, `!autorole`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
         )
     ]
   });
