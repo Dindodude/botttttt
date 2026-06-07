@@ -6,6 +6,7 @@ const {
   ActionRowBuilder,
   AttachmentBuilder,
   ActivityType,
+  AuditLogEvent,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -29,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-autorole-control";
+const BOT_VERSION = "2026-06-07-automod-escalation";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -198,6 +199,8 @@ const TICKET_TYPES = {
   partnership: "Partnership"
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
+const AUTOMOD_RESET_MS = 14 * DAY_MS;
+const AUTOMOD_SPAM_WINDOW_MS = 20 * 1000;
 const PUNISHMENT_RULES = {
   drama: { label: "Starting/provoking drama", first: { action: "warn" } },
   harassment: { label: "Harassment", first: { action: "warn" }, repeatTimeoutDays: 3 },
@@ -213,6 +216,17 @@ const PUNISHMENT_RULES = {
   moddiscussion: { label: "Discussing moderation outside tickets", first: { action: "remind" } },
   impersonation: { label: "Impersonating staff", first: { action: "tempban", days: 14 } }
 };
+const AUTOMOD_RULES = {
+  massmentions: { label: "Mass mentions", grade: 2, delete: true },
+  linkspam: { label: "Link or invite spam", grade: 2, delete: true },
+  repeatspam: { label: "Repeated message spam", grade: 1, delete: true },
+  caps: { label: "Excessive caps", grade: 1, delete: false },
+  emojispam: { label: "Emoji/sticker spam", grade: 1, delete: true },
+  nsfw: { label: "NSFW content", grade: 99, action: { action: "ban" }, delete: true }
+};
+const NSFW_PATTERN = /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|sex\s*(video|pic|image|link)|18\+)\b/i;
+const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-z0-9-]+/i;
+const URL_PATTERN = /https?:\/\/\S+/gi;
 
 const client = new Client({
   intents: [
@@ -244,7 +258,17 @@ client.on("messageCreate", async (message) => {
   const settings = getGuildSettings(message.guild.id) || {};
   const prefix = settings.prefix || PREFIX;
   const content = message.content.trim();
-  if (!content.startsWith(prefix)) return;
+  if (!content.startsWith(prefix)) {
+    await handleAutoMod(message, settings).catch((error) => {
+      console.error("AutoMod error:", error);
+      logTo(message.guild, "mod-logs", "AutoMod Error", [
+        field("User", `${message.author.tag} (${message.author.id})`),
+        field("Channel", `${message.channel}`),
+        field("Error", error.message)
+      ]);
+    });
+    return;
+  }
 
   const args = content.slice(prefix.length).trim().split(/\s+/);
   const command = args.shift()?.toLowerCase();
@@ -257,6 +281,7 @@ client.on("messageCreate", async (message) => {
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
     if (command === "autorole") return handleAutoRole(message, args);
+    if (command === "automod") return handleAutoModCommand(message, args);
     if (command === "rules") return handleRules(message);
     if (command === "help") return handleHelp(message);
     if (command === "suggest") return handleSuggest(message, args);
@@ -295,6 +320,7 @@ client.on("messageCreate", async (message) => {
     console.error(error);
     await message.reply("Something went wrong. Check the bot console/logs.");
   }
+
 });
 
 client.on("guildMemberAdd", async (member) => {
@@ -315,6 +341,16 @@ client.on("guildMemberRemove", async (member) => {
   data.analytics.leaves += 1;
   saveGuildData(member.guild.id, data);
   await sendJoinLog(member, "Member Left");
+
+  const kickLog = await fetchRecentAuditEntry(member.guild, AuditLogEvent.MemberKick, member.id);
+  if (kickLog) {
+    await logExternalModeration(member.guild, "Kick", member.user, kickLog.executor, kickLog.reason || "No reason provided");
+  }
+});
+
+client.on("guildBanAdd", async (ban) => {
+  const banLog = await fetchRecentAuditEntry(ban.guild, AuditLogEvent.MemberBanAdd, ban.user.id);
+  await logExternalModeration(ban.guild, "Ban", ban.user, banLog?.executor, banLog?.reason || ban.reason || "No reason provided");
 });
 
 client.on("messageDelete", async (message) => {
@@ -800,6 +836,50 @@ async function handleAutoRole(message, args) {
   return message.reply(`Auto role updated. New join roles: ${nextIds.length ? nextIds.map((id) => `<@&${id}>`).join(", ") : "None"}.`);
 }
 
+async function handleAutoModCommand(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!automod`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const action = (args[0] || "status").toLowerCase();
+
+  if (action === "status") {
+    return message.reply({
+      embeds: [
+        baseEmbed("AutoMod Settings")
+          .addFields(
+            field("Status", settings.autoModEnabled === false ? "Disabled" : "Enabled", true),
+            field("Reset Window", "Low-level automod strikes reset after 14 days", true),
+            field("Escalation", "3 basic strikes = warn threshold, then timeout/tempban/ban if it keeps going"),
+            field("Commands", "`!automod on`, `!automod off`, `!automod reset @user`")
+          )
+      ]
+    });
+  }
+
+  if (["on", "enable", "enabled"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, autoModEnabled: true });
+    return message.reply("AutoMod is now **on**.");
+  }
+
+  if (["off", "disable", "disabled"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, autoModEnabled: false });
+    return message.reply("AutoMod is now **off**.");
+  }
+
+  if (action === "reset") {
+    const user = message.mentions.users.first();
+    if (!user) return message.reply("Usage: `!automod reset @user`");
+    const data = getGuildData(message.guild.id);
+    data.autoMod ||= {};
+    delete data.autoMod[user.id];
+    saveGuildData(message.guild.id, data);
+    await logTo(message.guild, "mod-logs", "AutoMod Reset", [field("User", `${user.tag} (${user.id})`), field("Moderator", message.author.tag)]);
+    return message.reply(`AutoMod strikes reset for ${user.tag}.`);
+  }
+
+  return message.reply("Usage: `!automod status`, `!automod on`, `!automod off`, `!automod reset @user`");
+}
+
 async function applyRoleSetup(guild, summary) {
   try {
     await guild.roles.everyone.setPermissions(EVERYONE_PERMS, "Kaiju Reincarnated safe everyone permissions");
@@ -1270,7 +1350,7 @@ async function handleCommands(message) {
       baseEmbed(`${BRAND} Commands`)
         .setDescription("If this message appears, prefix commands are working.")
         .addFields(
-          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!rules`"),
+          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!automod`, `!rules`"),
           field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
           field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
           field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
@@ -1290,7 +1370,7 @@ async function handleHelp(message) {
           field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
           field("Ticket Commands", "`!claimticket`, `!add @user`, `!remove @user`"),
           field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation Commands", "`!staffstats`, `!autorole`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
+          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
         )
     ]
   });
@@ -1904,6 +1984,28 @@ async function logModeration(guild, action, user, moderator, reason) {
   await logTo(guild, "mod-logs", action, [field("User", `${user.tag} (${user.id})`), field("Moderator", `${moderator.tag}`), field("Reason", reason)]);
 }
 
+async function logExternalModeration(guild, action, user, moderator, reason) {
+  const moderatorLabel = moderator ? `${moderator.tag} (${moderator.id})` : "Unknown from audit log";
+  await logTo(guild, "mod-logs", `External ${action}`, [
+    field("User", `${user.tag} (${user.id})`),
+    field("Moderator", moderatorLabel),
+    field("Reason", reason || "No reason provided")
+  ]);
+}
+
+async function fetchRecentAuditEntry(guild, type, targetId) {
+  if (!guild.members.me.permissions.has(PermissionFlagsBits.ViewAuditLog)) return null;
+
+  const logs = await guild.fetchAuditLogs({ type, limit: 5 }).catch(() => null);
+  const entry = logs?.entries.find((auditEntry) => {
+    const isTarget = auditEntry.target?.id === targetId;
+    const isRecent = Date.now() - auditEntry.createdTimestamp < 15 * 1000;
+    return isTarget && isRecent;
+  });
+
+  return entry || null;
+}
+
 function incrementStaffStat(guildId, userId, key, amount = 1) {
   const data = getGuildData(guildId);
   data.staffStats ||= {};
@@ -2131,6 +2233,141 @@ async function logTo(guild, channelName, title, fields) {
   const channel = findChannel(guild, channelName);
   if (!channel) return;
   await channel.send({ embeds: [baseEmbed(title).addFields(fields).setFooter({ text: BRAND })] }).catch(() => {});
+}
+
+async function handleAutoMod(message, settings = {}) {
+  if (settings.autoModEnabled === false) return;
+  if (isStaff(message.member)) return;
+
+  const result = detectAutoModInfraction(message);
+  if (!result) return;
+
+  const rule = AUTOMOD_RULES[result.ruleKey];
+  const shouldDelete = rule.delete || result.delete;
+  const deleted = shouldDelete ? await message.delete().then(() => true).catch(() => false) : false;
+  const data = getGuildData(message.guild.id);
+  data.autoMod ||= {};
+  const record = data.autoMod[message.author.id] ||= { strikes: 0, history: [], recent: [] };
+  const now = Date.now();
+
+  if (!record.lastAt || now - record.lastAt > AUTOMOD_RESET_MS) record.strikes = 0;
+  record.strikes += rule.grade;
+  record.lastAt = now;
+  record.history = (record.history || []).filter((entry) => now - entry.at < AUTOMOD_RESET_MS);
+  record.history.push({
+    rule: result.ruleKey,
+    label: rule.label,
+    grade: rule.grade,
+    content: message.content.slice(0, 500),
+    channelId: message.channel.id,
+    deleted,
+    at: now
+  });
+
+  const punishment = rule.action || determineAutoModPunishment(record.strikes);
+  if (punishment.action === "warn") {
+    data.warnings[message.author.id] ||= [];
+    data.warnings[message.author.id].push({
+      reason: `AutoMod: ${rule.label} (${result.reason})`,
+      moderatorId: client.user.id,
+      at: now
+    });
+  }
+
+  data.analytics.punishments += 1;
+  saveGuildData(message.guild.id, data);
+
+  const actionError = await applyPunishmentAction(message.guild, message.author, message.member, punishment, `AutoMod: ${rule.label}. ${result.reason}`, client.user)
+    .then(() => null)
+    .catch((error) => error);
+  await logAutoModAction(message, rule, result, punishment, deleted, record.strikes);
+
+  if (actionError) {
+    await logTo(message.guild, "mod-logs", "AutoMod Action Failed", [
+      field("User", `${message.author.tag} (${message.author.id})`),
+      field("Action", formatPunishment(punishment), true),
+      field("Reason", actionError.message)
+    ]);
+  }
+}
+
+function detectAutoModInfraction(message) {
+  const content = message.content || "";
+  const urls = content.match(URL_PATTERN) || [];
+  const mentionCount = message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0);
+  const recent = getRecentAuthorMessages(message);
+
+  if (NSFW_PATTERN.test(content) || message.attachments.some((attachment) => NSFW_PATTERN.test(`${attachment.name || ""} ${attachment.url || ""}`))) {
+    return { ruleKey: "nsfw", reason: "Explicit NSFW keyword or attachment name detected.", delete: true };
+  }
+
+  if (message.mentions.everyone || mentionCount >= 5 || recent.reduce((total, entry) => total + (entry.mentions || 0), mentionCount) >= 8) {
+    return { ruleKey: "massmentions", reason: `${mentionCount} mention(s) in one message or too many mentions in a short window.`, delete: true };
+  }
+
+  if (DISCORD_INVITE_PATTERN.test(content) || urls.length >= 3 || recent.reduce((total, entry) => total + (entry.urls || 0), urls.length) >= 5) {
+    return { ruleKey: "linkspam", reason: "Discord invite, advertising link, or too many links in a short window.", delete: true };
+  }
+
+  const repeated = recent.filter((entry) => entry.normalized && entry.normalized === normalizeSpamText(content)).length;
+  if (content.length >= 4 && repeated >= 3) {
+    return { ruleKey: "repeatspam", reason: "Repeated the same message too many times.", delete: true };
+  }
+
+  const letters = content.replace(/[^a-z]/gi, "");
+  const caps = content.replace(/[^A-Z]/g, "");
+  if (letters.length >= 18 && caps.length / letters.length >= 0.75) {
+    return { ruleKey: "caps", reason: "Too much uppercase text.", delete: false };
+  }
+
+  const emojiCount = (content.match(/<a?:\w+:\d+>|[\u{1F300}-\u{1FAFF}]/gu) || []).length;
+  if (emojiCount >= 10 || message.stickers.size >= 2) {
+    return { ruleKey: "emojispam", reason: "Too many emojis or stickers.", delete: true };
+  }
+
+  return null;
+}
+
+function getRecentAuthorMessages(message) {
+  const data = getGuildData(message.guild.id);
+  data.autoModRecent ||= {};
+  const now = Date.now();
+  const userRecent = (data.autoModRecent[message.author.id] || []).filter((entry) => now - entry.at < AUTOMOD_SPAM_WINDOW_MS);
+  userRecent.push({
+    at: now,
+    normalized: normalizeSpamText(message.content),
+    mentions: message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0),
+    urls: (message.content.match(URL_PATTERN) || []).length
+  });
+  data.autoModRecent[message.author.id] = userRecent.slice(-10);
+  saveGuildData(message.guild.id, data);
+  return userRecent.slice(0, -1);
+}
+
+function normalizeSpamText(content) {
+  return content.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function determineAutoModPunishment(strikes) {
+  if (strikes <= 3) return { action: "warn" };
+  if (strikes <= 5) return { action: "timeout", days: 1 };
+  if (strikes <= 7) return { action: "tempban", days: 7 };
+  if (strikes <= 9) return { action: "tempban", days: 31 };
+  return { action: "ban" };
+}
+
+async function logAutoModAction(message, rule, result, punishment, deleted, strikes) {
+  await logTo(message.guild, "mod-logs", "AutoMod Action", [
+    field("User", `${message.author.tag} (${message.author.id})`),
+    field("Channel", `${message.channel}`),
+    field("Infraction", rule.label, true),
+    field("Grade", rule.grade, true),
+    field("Current Strikes", strikes, true),
+    field("Action", formatPunishment(punishment), true),
+    field("Message Deleted", deleted ? "Yes" : "No", true),
+    field("Reason", result.reason),
+    field("Content", (message.content || "No text content.").slice(0, 1000))
+  ]);
 }
 
 function trackMessage(message) {
