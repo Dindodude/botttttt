@@ -18,6 +18,16 @@ It does not include Death Pit commands or Kaiju Alpha hosting systems.
    - `npm install`
    - `npm start`
 
+## JustRunMy.App Build
+
+This project includes a `Dockerfile` for JustRunMy.App Git deployments. Make sure your JustRun app has this environment variable set:
+
+```text
+DISCORD_TOKEN=your_bot_token
+```
+
+The bot is a worker/background app, so it does not need a website port.
+
 ## First Command
 
 Run this in your new Discord server:
