@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-start-here-command";
+const BOT_VERSION = "2026-06-07-start-here-ticket-support";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -1190,6 +1190,10 @@ function voiceChannelOverwrites(guild, channelName) {
 async function postStartGuide(guild, summary) {
   const channel = findChannel(guild, "start-here");
   if (!channel) return;
+  const ticketChannel = findChannel(guild, "tickets");
+  const ticketText = ticketChannel
+    ? `Go to ${ticketChannel} and click the ticket panel if you need private help, want to report a player, or need staff to review something.`
+    : "Go to the tickets channel and click the ticket panel if you need private help, want to report a player, or need staff to review something.";
 
   const oldGuide = await channel.messages.fetch({ limit: 20 }).catch(() => null);
   const existingGuide = oldGuide?.find((message) => message.author.id === client.user.id && message.embeds[0]?.title?.includes("Start Here"));
@@ -1211,7 +1215,7 @@ async function postStartGuide(guild, summary) {
           field("Community", "Here you can talk about kaiju battles, builds, stats, and your own creations. You can also send us feedback or report bugs. Share your clips, participate in events, and have fun."),
           field("Game Talk", "Use the game channels for kaiju discussion, battle ideas, stats, builds, clips, media, fan art, and event conversations."),
           field("Bugs & Feedback", "Use `!bugreport` for bugs and `!suggest your idea` for suggestions. Clear details help staff and developers understand what happened."),
-          field("Support", "Use `!ticketpanel` if you need private help, want to report a player, or need staff to review something."),
+          field("Support", ticketText),
           field("Useful Commands", "`!help`, `!rules`, `!suggest`, `!review`, `!bugreport`, `!ticketpanel`, `!rank`, `!leaderboard`")
         )
     ],
@@ -1337,11 +1341,15 @@ function buildRulesEmbed() {
 
 async function handleGuideButton(interaction) {
   const guide = interaction.customId.split(":")[1];
+  const ticketChannel = findChannel(interaction.guild, "tickets");
+  const ticketText = ticketChannel
+    ? `Go to ${ticketChannel} and click the ticket panel for private help, player reports, or staff review.`
+    : "Go to the tickets channel and click the ticket panel for private help, player reports, or staff review.";
   const text = {
     play: "Talk about kaiju battles, builds, stats, and strategies in the game channels. Watch announcements and events for official news and community activities.",
     community: "Share clips, media, fan art, builds, stats, battle ideas, feedback, and event talk in the community channels. Keep it respectful and use each channel for its purpose.",
     bugs: "Use `!bugreport` for bugs and `!suggest your idea` for feedback or suggestions. Include what happened, where it happened, and screenshots or clips if you have them.",
-    support: "Use `!ticketpanel` when you need private help, want to report a player, or need staff to review something.",
+    support: ticketText,
     rules: "Read the rules channel before chatting. Be respectful, no NSFW, no harassment, no spam, no scams, and use common sense."
   }[guide] || "Use `!help` for commands.";
 
