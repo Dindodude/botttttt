@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-automod-escalation";
+const BOT_VERSION = "2026-06-07-badword-command";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -217,6 +217,7 @@ const PUNISHMENT_RULES = {
   impersonation: { label: "Impersonating staff", first: { action: "tempban", days: 14 } }
 };
 const AUTOMOD_RULES = {
+  badword: { label: "Filtered word/phrase", grade: 2, delete: true },
   massmentions: { label: "Mass mentions", grade: 2, delete: true },
   linkspam: { label: "Link or invite spam", grade: 2, delete: true },
   repeatspam: { label: "Repeated message spam", grade: 1, delete: true },
@@ -282,6 +283,7 @@ client.on("messageCreate", async (message) => {
     if (command === "rolesetup") return handleRoleSetup(message);
     if (command === "autorole") return handleAutoRole(message, args);
     if (command === "automod") return handleAutoModCommand(message, args);
+    if (command === "badword") return handleBadWordCommand(message, args);
     if (command === "rules") return handleRules(message);
     if (command === "help") return handleHelp(message);
     if (command === "suggest") return handleSuggest(message, args);
@@ -880,6 +882,49 @@ async function handleAutoModCommand(message, args) {
   return message.reply("Usage: `!automod status`, `!automod on`, `!automod off`, `!automod reset @user`");
 }
 
+async function handleBadWordCommand(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!badword`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const action = (args.shift() || "list").toLowerCase();
+  const current = Array.isArray(settings.badWords) ? settings.badWords : [];
+
+  if (action === "list") {
+    return message.reply({
+      embeds: [
+        baseEmbed("Bad Word Filter")
+          .addFields(
+            field("Words/Phrases", current.length ? current.map((word) => `\`${word}\``).join(", ").slice(0, 1024) : "None set."),
+            field("Commands", "`!badword add word or phrase`, `!badword remove word or phrase`, `!badword clear`, `!badword list`")
+          )
+      ]
+    });
+  }
+
+  if (action === "clear") {
+    saveGuildSettings(message.guild.id, { ...settings, badWords: [] });
+    return message.reply("Bad word list cleared.");
+  }
+
+  if (!["add", "remove", "delete"].includes(action)) {
+    return message.reply("Usage: `!badword add word or phrase`, `!badword remove word or phrase`, `!badword clear`, `!badword list`");
+  }
+
+  const phrase = normalizeBadWord(args.join(" "));
+  if (!phrase) return message.reply("Please type a word or phrase. Example: `!badword add bad phrase`");
+
+  let next = current;
+  if (action === "add") {
+    next = [...new Set([...current, phrase])].sort((a, b) => a.localeCompare(b));
+    saveGuildSettings(message.guild.id, { ...settings, badWords: next });
+    return message.reply(`Added \`${phrase}\` to the bad word filter.`);
+  }
+
+  next = current.filter((word) => word !== phrase);
+  saveGuildSettings(message.guild.id, { ...settings, badWords: next });
+  return message.reply(current.includes(phrase) ? `Removed \`${phrase}\` from the bad word filter.` : `\`${phrase}\` was not in the bad word filter.`);
+}
+
 async function applyRoleSetup(guild, summary) {
   try {
     await guild.roles.everyone.setPermissions(EVERYONE_PERMS, "Kaiju Reincarnated safe everyone permissions");
@@ -1350,7 +1395,7 @@ async function handleCommands(message) {
       baseEmbed(`${BRAND} Commands`)
         .setDescription("If this message appears, prefix commands are working.")
         .addFields(
-          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!automod`, `!rules`"),
+          field("Setup", "`!krupdate`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!rules`"),
           field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
           field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
           field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
@@ -1370,7 +1415,7 @@ async function handleHelp(message) {
           field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
           field("Ticket Commands", "`!claimticket`, `!add @user`, `!remove @user`"),
           field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
+          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!badword`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
         )
     ]
   });
@@ -2239,7 +2284,7 @@ async function handleAutoMod(message, settings = {}) {
   if (settings.autoModEnabled === false) return;
   if (isStaff(message.member)) return;
 
-  const result = detectAutoModInfraction(message);
+  const result = detectAutoModInfraction(message, settings);
   if (!result) return;
 
   const rule = AUTOMOD_RULES[result.ruleKey];
@@ -2291,11 +2336,16 @@ async function handleAutoMod(message, settings = {}) {
   }
 }
 
-function detectAutoModInfraction(message) {
+function detectAutoModInfraction(message, settings = {}) {
   const content = message.content || "";
   const urls = content.match(URL_PATTERN) || [];
   const mentionCount = message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0);
   const recent = getRecentAuthorMessages(message);
+  const badWord = findBadWordMatch(content, settings.badWords);
+
+  if (badWord) {
+    return { ruleKey: "badword", reason: `Matched filtered word or phrase: ${badWord}`, delete: true };
+  }
 
   if (NSFW_PATTERN.test(content) || message.attachments.some((attachment) => NSFW_PATTERN.test(`${attachment.name || ""} ${attachment.url || ""}`))) {
     return { ruleKey: "nsfw", reason: "Explicit NSFW keyword or attachment name detected.", delete: true };
@@ -2346,6 +2396,20 @@ function getRecentAuthorMessages(message) {
 
 function normalizeSpamText(content) {
   return content.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function normalizeBadWord(value = "") {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function findBadWordMatch(content, badWords = []) {
+  if (!Array.isArray(badWords) || !badWords.length) return null;
+
+  const normalizedContent = ` ${normalizeBadWord(content)} `;
+  return badWords
+    .map((word) => normalizeBadWord(word))
+    .filter(Boolean)
+    .find((word) => normalizedContent.includes(` ${word} `)) || null;
 }
 
 function determineAutoModPunishment(strikes) {
