@@ -28,6 +28,18 @@ DISCORD_TOKEN=your_bot_token
 
 The bot is a worker/background app, so it does not need a website port.
 
+If JustRun shows a run command field, use:
+
+```text
+node /bot/index.js
+```
+
+The Docker image stores code in `/bot` on purpose so an `/app` volume cannot hide updated code. Persistent bot data should use:
+
+```text
+/app/data
+```
+
 ## First Command
 
 Run this in your new Discord server:

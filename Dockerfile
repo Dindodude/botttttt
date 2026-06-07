@@ -1,12 +1,13 @@
 FROM node:20-alpine
 
-WORKDIR /app
+WORKDIR /bot
 
 COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY . .
 
-RUN mkdir -p data/backups
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data/backups
 
-CMD ["npm", "start"]
+CMD ["node", "/bot/index.js"]
