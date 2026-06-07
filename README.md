@@ -60,6 +60,44 @@ Then run:
 
 Do not commit your bot token or JustRun Git token into files. Keep them in environment variables or host secrets.
 
+## Fully Automated GitHub Deploy
+
+The repo includes `.github/workflows/deploy-justrun-docker.yml`.
+
+Use this if JustRun Git deploy is not updating the running bot correctly. This workflow builds the Docker image in GitHub Actions and pushes it to JustRun's Docker registry on every push to `main` or `master`.
+
+Add these GitHub repository secrets:
+
+```text
+JUSTRUN_REGISTRY
+JUSTRUN_REGISTRY_USER
+JUSTRUN_REGISTRY_PASSWORD
+JUSTRUN_IMAGE
+```
+
+Example values:
+
+```text
+JUSTRUN_REGISTRY=jdr-g97dt38x.justrunmy.app
+JUSTRUN_IMAGE=jdr-g97dt38x.justrunmy.app/g97dt38x
+```
+
+Use your JustRun Docker username/password for the other two secrets.
+
+In JustRun's Docker Push Deployment page, enable:
+
+```text
+Automatically deploy after push
+```
+
+The workflow pushes this tag:
+
+```text
+v1_autodeploy
+```
+
+Important: do not mount a volume over `/app`, or any Docker image can still be hidden by old files. Persistent storage should be `/app/data` only.
+
 This creates/checks:
 
 - Kaiju Reincarnated categories

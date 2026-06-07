@@ -1,0 +1,33 @@
+name: Deploy to JustRunMy.App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  docker-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to JustRun Docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.JUSTRUN_REGISTRY }}
+          username: ${{ secrets.JUSTRUN_REGISTRY_USER }}
+          password: ${{ secrets.JUSTRUN_REGISTRY_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.JUSTRUN_IMAGE }}:v1_autodeploy
+            ${{ secrets.JUSTRUN_IMAGE }}:${{ github.sha }}
