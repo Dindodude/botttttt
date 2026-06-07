@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-badword-command";
+const BOT_VERSION = "2026-06-07-start-here-refresh";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -1172,30 +1172,39 @@ async function postStartGuide(guild, summary) {
   if (!channel) return;
 
   const oldGuide = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-  if (oldGuide?.some((message) => message.author.id === client.user.id && message.embeds[0]?.title?.includes("Start Here"))) {
-    summary.skipped.push("Start-here guide");
-    return;
-  }
+  const existingGuide = oldGuide?.find((message) => message.author.id === client.user.id && message.embeds[0]?.title?.includes("Start Here"));
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("guide:play").setLabel("How to Play").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("guide:bugs").setLabel("Report Bugs").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("guide:suggest").setLabel("Suggestions").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("guide:community").setLabel("Community").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("guide:bugs").setLabel("Bugs & Feedback").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("guide:support").setLabel("Support").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("guide:rules").setLabel("Rules").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("guide:tester").setLabel("Tester Info").setStyle(ButtonStyle.Secondary)
   );
 
-  await channel.send({
+  const payload = {
     embeds: [
       baseEmbed("Start Here - Kaiju Reincarnated")
-        .setDescription("Welcome to the official Kaiju Reincarnated community. Read the rules, watch announcements for updates, report bugs clearly, and use tickets when you need support.")
+        .setDescription("Welcome to the Kaiju Reincarnated community. This server is where players talk about the game, share creations, follow updates, join events, report issues, and get support from staff.")
         .addFields(
-          field("Useful commands", "`!help`, `!suggest`, `!review`, `!bugreport`, `!ticketpanel`, `!rank`"),
-          field("Community", "Talk kaiju battles, builds, stats, sneak peeks, feedback, clips, and events.")
+          field("Start Here", "Read the rules first, check announcements for official news, then jump into the community channels when you are ready."),
+          field("Community", "Here you can talk about kaiju battles, builds, stats, and your own creations. You can also send us feedback or report bugs. Share your clips, participate in events, and have fun."),
+          field("Game Talk", "Use the game channels for kaiju discussion, battle ideas, stats, builds, clips, media, fan art, and event conversations."),
+          field("Bugs & Feedback", "Use `!bugreport` for bugs and `!suggest your idea` for suggestions. Clear details help staff and developers understand what happened."),
+          field("Support", "Use `!ticketpanel` if you need private help, want to report a player, or need staff to review something."),
+          field("Useful Commands", "`!help`, `!rules`, `!suggest`, `!review`, `!bugreport`, `!ticketpanel`, `!rank`, `!leaderboard`")
         )
     ],
     components: [row]
-  });
+  };
+
+  if (existingGuide) {
+    await existingGuide.edit(payload).catch((error) => summary.errors.push(`Start-here guide edit: ${error.message}`));
+    summary.permissions.push("Updated start-here guide panel");
+    return;
+  }
+
+  await channel.send(payload);
   summary.created.push("Start-here guide panel");
 }
 
@@ -1309,11 +1318,11 @@ function buildRulesEmbed() {
 async function handleGuideButton(interaction) {
   const guide = interaction.customId.split(":")[1];
   const text = {
-    play: "Watch #game-updates and #start-here, join community chat, and follow event posts for game sessions and kaiju battle info.",
-    bugs: "Use `!bugreport` or post in the bug report area. Include what happened, how to reproduce it, and screenshots if possible.",
-    suggest: "Use `!suggest your idea` so the community can vote and staff can review it.",
-    rules: "Read the rules channel. Be respectful, no NSFW, no harassment, no spam, and use common sense.",
-    tester: "Tester channels are for approved testers. Share clear bugs, balance feedback, and test results."
+    play: "Talk about kaiju battles, builds, stats, and strategies in the game channels. Watch announcements and events for official news and community activities.",
+    community: "Share clips, media, fan art, builds, stats, battle ideas, feedback, and event talk in the community channels. Keep it respectful and use each channel for its purpose.",
+    bugs: "Use `!bugreport` for bugs and `!suggest your idea` for feedback or suggestions. Include what happened, where it happened, and screenshots or clips if you have them.",
+    support: "Use `!ticketpanel` when you need private help, want to report a player, or need staff to review something.",
+    rules: "Read the rules channel before chatting. Be respectful, no NSFW, no harassment, no spam, no scams, and use common sense."
   }[guide] || "Use `!help` for commands.";
 
   await interaction.reply({ content: text, ephemeral: true });
