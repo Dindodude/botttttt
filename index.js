@@ -230,12 +230,16 @@ client.on("messageCreate", async (message) => {
 
   const settings = getGuildSettings(message.guild.id) || {};
   const prefix = settings.prefix || PREFIX;
-  if (!message.content.startsWith(prefix)) return;
+  const content = message.content.trim();
+  if (!content.startsWith(prefix)) return;
 
-  const args = message.content.slice(prefix.length).trim().split(/\s+/);
+  const args = content.slice(prefix.length).trim().split(/\s+/);
   const command = args.shift()?.toLowerCase();
+  if (!command) return;
 
   try {
+    if (command === "ping") return handlePing(message);
+    if (command === "commands") return handleCommands(message);
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
     if (command === "rules") return handleRules(message);
@@ -264,6 +268,7 @@ client.on("messageCreate", async (message) => {
     if (command === "configview") return handleConfigView(message);
     if (command === "configreload") return handleConfigReload(message);
     if (command === "configreset") return handleConfigReset(message);
+    return message.reply(`I saw \`${prefix}${command}\`, but that command does not exist. Try \`${prefix}commands\`.`);
   } catch (error) {
     console.error(error);
     await message.reply("Something went wrong. Check the bot console/logs.");
@@ -1116,6 +1121,25 @@ async function sendJoinLog(member, title) {
     field("User", `${member.user.tag} (${member.id})`),
     field("Account Created", `<t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`)
   ]);
+}
+
+async function handlePing(message) {
+  await message.reply(`Pong. Bot is online. Prefix is \`${(getGuildSettings(message.guild.id) || {}).prefix || PREFIX}\`.`);
+}
+
+async function handleCommands(message) {
+  await message.reply({
+    embeds: [
+      baseEmbed(`${BRAND} Commands`)
+        .setDescription("If this message appears, prefix commands are working.")
+        .addFields(
+          field("Setup", "`!krupdate`, `!rolesetup`, `!rules`"),
+          field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
+          field("Support", "`!ticketpanel`"),
+          field("Moderation", "`!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`")
+        )
+    ]
+  });
 }
 
 async function handleHelp(message) {
