@@ -60,6 +60,8 @@ function reloadSettings() {
 function getGuildData(guildId) {
   database[guildId] ||= {
     warnings: {},
+    cases: [],
+    nextCaseId: 1,
     xp: {},
     tickets: {},
     suggestions: [],

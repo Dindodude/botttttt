@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-start-here-ticket-support";
+const BOT_VERSION = "2026-06-07-mod-ticket-cleanup";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -221,7 +221,6 @@ const AUTOMOD_RULES = {
   massmentions: { label: "Mass mentions", grade: 2, delete: true },
   linkspam: { label: "Link or invite spam", grade: 2, delete: true },
   repeatspam: { label: "Repeated message spam", grade: 1, delete: true },
-  caps: { label: "Excessive caps", grade: 1, delete: false },
   emojispam: { label: "Emoji/sticker spam", grade: 1, delete: true },
   nsfw: { label: "NSFW content", grade: 99, action: { action: "ban" }, delete: true }
 };
@@ -254,7 +253,6 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
 
   trackMessage(message);
-  await handleXp(message);
 
   const settings = getGuildSettings(message.guild.id) || {};
   const prefix = settings.prefix || PREFIX;
@@ -302,17 +300,20 @@ client.on("messageCreate", async (message) => {
     if (command === "testerleaderboard") return handleTesterLeaderboard(message);
     if (command === "testerstats" || command.startsWith("testerstats")) return handleTesterStats(message);
     if (command === "claimticket") return handleClaimTicket(message);
-    if (command === "add") return handleTicketAdd(message);
-    if (command === "remove") return handleTicketRemove(message);
+    if (command === "add" || command === "addinticket") return handleTicketAdd(message);
+    if (command === "remove" || command === "removefromticket") return handleTicketRemove(message);
     if (command === "warn") return handleWarn(message, args);
+    if (command === "unwarn") return handleUnwarn(message, args);
     if (command === "warnings") return handleWarnings(message);
     if (command === "punish") return handlePunish(message, args);
-    if (command === "punishments") return handlePunishments(message);
+    if (command === "cases" || command === "punishments") return handleCases(message);
     if (command === "tempban") return handleManualTempBan(message, args);
     if (command === "untempban") return handleUnTempBan(message, args);
     if (command === "kick") return handleKick(message, args);
     if (command === "ban") return handleBan(message, args);
+    if (command === "unban") return handleUnban(message, args);
     if (command === "timeout") return handleTimeout(message, args);
+    if (command === "untimeout") return handleUntimeout(message, args);
     if (command === "backup") return handleBackup(message);
     if (command === "restorebackup") return handleRestoreBackup(message, args);
     if (command === "configview") return handleConfigView(message);
@@ -399,6 +400,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("ticket:")) return handleTicketButton(interaction);
     if (interaction.customId.startsWith("ticketclose:")) return closeTicket(interaction);
     if (interaction.customId.startsWith("ticketdelete:")) return deleteTicket(interaction);
+    if (interaction.customId.startsWith("tickettranscript:")) return handleTicketTranscript(interaction);
     if (interaction.customId.startsWith("guide:")) return handleGuideButton(interaction);
   } catch (error) {
     console.error(error);
@@ -1216,7 +1218,7 @@ async function postStartGuide(guild, summary) {
           field("Game Talk", "Use the game channels for kaiju discussion, battle ideas, stats, builds, clips, media, fan art, and event conversations."),
           field("Bugs & Feedback", "Use `!bugreport` for bugs and `!suggest your idea` for suggestions. Clear details help staff and developers understand what happened."),
           field("Support", ticketText),
-          field("Useful Commands", "`!help`, `!rules`, `!suggest`, `!review`, `!bugreport`, `!ticketpanel`, `!rank`, `!leaderboard`")
+          field("Useful Commands", "`!help`, `!rules`, `!suggest`, `!review`, `!bugreport`, `!ticketpanel`")
         )
     ],
     components: [row]
@@ -1433,10 +1435,10 @@ async function handleCommands(message) {
         .setDescription("If this message appears, prefix commands are working.")
         .addFields(
           field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!rules`"),
-          field("General", "`!ping`, `!commands`, `!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
-          field("Support", "`!ticketpanel`, `!claimticket`, `!add @user`, `!remove @user`"),
+          field("General", "`!ping`, `!commands`, `!help`, `!review`, `!suggest`, `!bugreport`"),
+          field("Support", "`!ticketpanel`, `!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
           field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation", "`!staffstats`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`")
+          field("Moderation", "`!staffstats`, `!punish`, `!cases`, `!warn`, `!unwarn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`")
         )
     ]
   });
@@ -1447,12 +1449,12 @@ async function handleHelp(message) {
     embeds: [
       baseEmbed(`${BRAND} Help`)
         .addFields(
-          field("General Commands", "`!help`, `!rank`, `!leaderboard`, `!review`, `!suggest`, `!bugreport`"),
+          field("General Commands", "`!help`, `!review`, `!suggest`, `!bugreport`"),
           field("Support Commands", "`!ticketpanel`"),
           field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
-          field("Ticket Commands", "`!claimticket`, `!add @user`, `!remove @user`"),
+          field("Ticket Commands", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
           field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!badword`, `!punish`, `!punishments`, `!warn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!timeout`, `!rules`, `!analytics`")
+          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!badword`, `!punish`, `!cases`, `!warn`, `!unwarn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`, `!rules`, `!analytics`")
         )
     ]
   });
@@ -1553,6 +1555,7 @@ async function handleTicketButton(interaction) {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticketclose:${interaction.user.id}:${type}`).setLabel("Close Ticket").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`tickettranscript:${interaction.user.id}:${type}`).setLabel("Transcript").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`ticketdelete:${interaction.user.id}:${type}`).setLabel("Delete Ticket").setStyle(ButtonStyle.Danger)
   );
 
@@ -1569,7 +1572,11 @@ async function closeTicket(interaction) {
   if (data.ticketMeta[interaction.channel.id]) data.ticketMeta[interaction.channel.id].closedAt = Date.now();
   incrementStaffStat(interaction.guild.id, interaction.user.id, "closedTickets", 1);
   saveGuildData(interaction.guild.id, data);
-  await interaction.reply("Ticket closed.");
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`tickettranscript:${interaction.customId.split(":")[1]}:closed`).setLabel("Send Transcript").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`ticketdelete:${interaction.customId.split(":")[1]}:closed`).setLabel("Delete Ticket").setStyle(ButtonStyle.Danger)
+  );
+  await interaction.reply({ content: "Ticket closed. A transcript was sent to transcript logs.", components: [row] });
 }
 
 async function deleteTicket(interaction) {
@@ -1597,13 +1604,14 @@ async function handleClaimTicket(message) {
   data.ticketMeta[message.channel.id].claimedBy = message.author.id;
   incrementStaffStat(message.guild.id, message.author.id, "claimedTickets", 1);
   saveGuildData(message.guild.id, data);
+  await hideClaimedTicketFromOtherMods(message.channel, message.member, meta.ownerId);
   await message.channel.send(`${message.author} claimed this ticket.`);
 }
 
 async function handleTicketAdd(message) {
   if (!isStaff(message.member)) return message.reply("Only staff can add people to tickets.");
   const member = message.mentions.members.first();
-  if (!member) return message.reply("Usage: `!add @user`");
+  if (!member) return message.reply("Usage: `!addinticket @user`");
   if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
 
   await message.channel.permissionOverwrites.edit(member.id, {
@@ -1617,11 +1625,47 @@ async function handleTicketAdd(message) {
 async function handleTicketRemove(message) {
   if (!isStaff(message.member)) return message.reply("Only staff can remove people from tickets.");
   const member = message.mentions.members.first();
-  if (!member) return message.reply("Usage: `!remove @user`");
+  if (!member) return message.reply("Usage: `!removefromticket @user`");
   if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
 
   await message.channel.permissionOverwrites.delete(member.id).catch(() => {});
   await message.channel.send(`${member} was removed from this ticket by ${message.author}.`);
+}
+
+async function handleTicketTranscript(interaction) {
+  if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can send ticket transcripts.", ephemeral: true });
+  await saveTicketTranscript(interaction.channel, interaction.user, "manual transcript");
+  await interaction.reply({ content: "Transcript sent to transcript logs.", ephemeral: true });
+}
+
+async function hideClaimedTicketFromOtherMods(channel, claimerMember, ownerId) {
+  const guild = channel.guild;
+  const keepVisible = new Set([ownerId, claimerMember.id, guild.members.me.id]);
+
+  for (const roleName of STAFF_ROLES) {
+    const role = findRole(guild, roleName);
+    if (!role) continue;
+
+    if ([ROLE_NAMES.owner, ROLE_NAMES.admin].includes(roleName)) {
+      await channel.permissionOverwrites.edit(role.id, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true
+      }).catch(() => {});
+      continue;
+    }
+
+    await channel.permissionOverwrites.edit(role.id, { ViewChannel: false }).catch(() => {});
+  }
+
+  for (const id of keepVisible) {
+    if (!id) continue;
+    await channel.permissionOverwrites.edit(id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true
+    }).catch(() => {});
+  }
 }
 
 async function handleStaffStats(message) {
@@ -1717,7 +1761,7 @@ async function saveTicketTranscript(channel, staffUser, action) {
   const attachment = new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
     name: `transcript-${channel.name}-${Date.now()}.txt`
   });
-  const logChannel = findChannel(channel.guild, "logs") || findChannel(channel.guild, "mod-logs");
+  const logChannel = await ensureTranscriptLogChannel(channel.guild) || findChannel(channel.guild, "logs") || findChannel(channel.guild, "mod-logs");
 
   if (logChannel) {
     await logChannel.send({
@@ -1725,6 +1769,20 @@ async function saveTicketTranscript(channel, staffUser, action) {
       files: [attachment]
     }).catch(() => {});
   }
+}
+
+async function ensureTranscriptLogChannel(guild) {
+  const existing = findChannel(guild, "transcript-logs");
+  if (existing) return existing;
+
+  const staffCategory = guild.channels.cache.find((channel) => channel.type === ChannelType.GuildCategory && stripStyle(channel.name).includes("staff"));
+  return guild.channels.create({
+    name: "transcript-logs",
+    type: ChannelType.GuildText,
+    parent: staffCategory?.id || null,
+    permissionOverwrites: staffOverwrites(guild),
+    reason: "Ticket transcript logs"
+  }).catch(() => null);
 }
 
 async function handleBugReport(message) {
@@ -1787,21 +1845,7 @@ async function handleEndEvent(message) {
 }
 
 async function handleXp(message) {
-  const data = getGuildData(message.guild.id);
-  const settings = getGuildSettings(message.guild.id) || {};
-  const user = data.xp[message.author.id] ||= { xp: 0, level: 0, lastXp: 0 };
-  if (Date.now() - user.lastXp < XP_COOLDOWN) return;
-
-  const gained = Math.floor(Math.random() * 11) + 10;
-  user.xp += gained;
-  user.lastXp = Date.now();
-  const newLevel = Math.floor(Math.sqrt(user.xp / 100));
-  if (newLevel > user.level) {
-    user.level = newLevel;
-    await applyLevelRewardRoles(message.member, newLevel, settings);
-    await message.channel.send(`${message.author} reached level **${newLevel}**!`).catch(() => {});
-  }
-  saveGuildData(message.guild.id, data);
+  return null;
 }
 
 async function applyLevelRewardRoles(member, level, settings) {
@@ -1832,18 +1876,11 @@ async function applyLevelRewardRoles(member, level, settings) {
 }
 
 async function handleRank(message) {
-  const data = getGuildData(message.guild.id);
-  const user = data.xp[message.author.id] || { xp: 0, level: 0 };
-  const nextLevelXp = (user.level + 1) ** 2 * 100;
-  await message.reply({ embeds: [baseEmbed("Rank Card").addFields(field("Level", user.level, true), field("XP", `${user.xp}/${nextLevelXp}`, true))] });
+  await message.reply("The built-in level system is disabled because Noctaly is handling levels now.");
 }
 
 async function handleLeaderboard(message) {
-  const data = getGuildData(message.guild.id);
-  const leaders = Object.entries(data.xp).sort(([, a], [, b]) => b.xp - a.xp).slice(0, 10);
-  await message.reply({
-    embeds: [baseEmbed("XP Leaderboard").setDescription(leaders.map(([id, stats], index) => `${index + 1}. <@${id}> - Level ${stats.level} (${stats.xp} XP)`).join("\n") || "No XP yet.")]
-  });
+  await message.reply("The built-in leaderboard is disabled because Noctaly is handling levels now.");
 }
 
 async function handleAnalytics(message) {
@@ -1884,30 +1921,74 @@ async function handleServerStats(message) {
 
 async function handleWarn(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can warn users.");
-  const user = message.mentions.users.first();
-  if (!user) return message.reply("Usage: `!warn @user reason`");
+  const user = await resolveUserArgument(message, args[0]);
+  if (!user) return message.reply("Usage: `!warn @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
   const data = getGuildData(message.guild.id);
   data.warnings[user.id] ||= [];
-  data.warnings[user.id].push({ reason, moderatorId: message.author.id, at: Date.now() });
+  const caseId = addCase(data, {
+    type: "Warn",
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason
+  });
+  data.warnings[user.id].push({ caseId, reason, moderatorId: message.author.id, at: Date.now() });
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
   await user.send(`You were warned in ${message.guild.name}: ${reason}`).catch(() => {});
-  await logModeration(message.guild, "Warn", user, message.author, reason);
-  await message.reply(`Warned ${user.tag}.`);
+  await logModeration(message.guild, "Warn", user, message.author, `${reason} | Case #${caseId}`);
+  await message.reply(`Warned ${user.tag}. Case #${caseId}.`);
 }
 
 async function handleWarnings(message) {
   if (!isModerator(message.member)) return message.reply("Only moderators can view warnings.");
-  const user = message.mentions.users.first() || message.author;
+  const user = await resolveUserArgument(message, [...message.content.trim().split(/\s+/)].slice(1)[0]) || message.author;
   const warnings = getGuildData(message.guild.id).warnings[user.id] || [];
-  await message.reply({ embeds: [baseEmbed(`Warnings for ${user.tag}`).setDescription(warnings.map((warning, index) => `${index + 1}. ${warning.reason} - <@${warning.moderatorId}>`).join("\n") || "No warnings.")] });
+  await message.reply({ embeds: [baseEmbed(`Warnings for ${user.tag}`).setDescription(warnings.map((warning, index) => `${index + 1}. Case #${warning.caseId || "old"} - ${warning.reason} - <@${warning.moderatorId}>`).join("\n") || "No warnings.")] });
+}
+
+async function handleUnwarn(message, args) {
+  if (!isModerator(message.member)) return message.reply("Only moderators can remove warnings.");
+
+  const user = await resolveUserArgument(message, args[0]);
+  if (!user) return message.reply("Usage: `!unwarn @user-or-id [warning number/case id] [reason]`");
+
+  const data = getGuildData(message.guild.id);
+  const warnings = data.warnings[user.id] || [];
+  if (!warnings.length) return message.reply(`${user.tag} has no warnings.`);
+
+  const requested = args[1] ? Number(String(args[1]).replace("#", "")) : null;
+  let index = warnings.length - 1;
+  if (requested && !Number.isNaN(requested)) {
+    const byCase = warnings.findIndex((warning) => Number(warning.caseId) === requested);
+    index = byCase >= 0 ? byCase : requested - 1;
+  }
+
+  if (index < 0 || index >= warnings.length) return message.reply("That warning number/case id was not found.");
+
+  const removed = warnings.splice(index, 1)[0];
+  const reason = args.slice(requested ? 2 : 1).join(" ") || "Warning removed";
+  const caseId = addCase(data, {
+    type: "Unwarn",
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason,
+    details: `Removed warning case #${removed.caseId || "old"}`
+  });
+
+  saveGuildData(message.guild.id, data);
+  await logModeration(message.guild, "Unwarn", user, message.author, `${reason} | Removed warning: ${removed.reason} | Case #${caseId}`);
+  await message.reply(`Removed a warning from ${user.tag}. Case #${caseId}.`);
 }
 
 async function handlePunish(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can use `!punish`.");
 
-  const user = message.mentions.users.first();
+  const user = await resolveUserArgument(message, args[0]);
   const ruleKey = normalizePunishmentRule(args[1]);
   const rawReason = args.slice(2).join(" ").trim();
   const severe = /\b(severe|bad|very bad|racism|homophobia|image|images|disgusting|porn)\b/i.test(rawReason);
@@ -1950,40 +2031,53 @@ async function handlePunish(message, args) {
     deleted,
     at: Date.now()
   });
+  const caseId = addCase(data, {
+    type: formatPunishment(punishment),
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason,
+    details: `${PUNISHMENT_RULES[ruleKey].label}; offense count ${nextCount}; deleted message: ${deleted ? "yes" : "no"}`
+  });
 
   if (punishment.action === "warn") {
     data.warnings[user.id] ||= [];
-    data.warnings[user.id].push({ reason: `${PUNISHMENT_RULES[ruleKey].label}: ${reason}`, moderatorId: message.author.id, at: Date.now() });
+    data.warnings[user.id].push({ caseId, reason: `${PUNISHMENT_RULES[ruleKey].label}: ${reason}`, moderatorId: message.author.id, at: Date.now() });
   }
 
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
 
   await applyPunishmentAction(message.guild, user, member, punishment, reason, message.author);
-  await logPunishment(message.guild, user, message.author, ruleKey, punishment, reason, evidence, deleted, nextCount);
-  await message.reply(`Punishment applied to **${user.tag}**: **${formatPunishment(punishment)}** for **${PUNISHMENT_RULES[ruleKey].label}**.`);
+  await logPunishment(message.guild, user, message.author, ruleKey, punishment, reason, evidence, deleted, nextCount, caseId);
+  await message.reply(`Punishment applied to **${user.tag}**: **${formatPunishment(punishment)}** for **${PUNISHMENT_RULES[ruleKey].label}**. Case #${caseId}.`);
 }
 
-async function handlePunishments(message) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can view punishments.");
+async function handleCases(message) {
+  if (!isModerator(message.member)) return message.reply("Only moderators can view cases.");
 
-  const user = message.mentions.users.first() || message.author;
-  const record = getGuildData(message.guild.id).punishments?.[user.id];
+  const targetArg = [...message.content.trim().split(/\s+/)].slice(1)[0];
+  const user = await resolveUserArgument(message, targetArg);
+  const data = getGuildData(message.guild.id);
+  const cases = (data.cases || []).filter((entry) => !user || entry.userId === user.id).slice(-15).reverse();
 
-  if (!record?.history?.length) {
-    await message.reply(`${user.tag} has no punishment history.`);
+  if (!cases.length) {
+    await message.reply(user ? `${user.tag} has no cases.` : "No cases found.");
     return;
   }
 
   await message.reply({
     embeds: [
-      baseEmbed(`Punishments for ${user.tag}`)
-        .setDescription(record.history.slice(-10).map((entry, index) => [
-          `**${index + 1}. ${PUNISHMENT_RULES[entry.rule]?.label || entry.rule}**`,
-          `Action: ${entry.action}${entry.days ? ` (${entry.days}d)` : ""}`,
+      baseEmbed(user ? `Cases for ${user.tag}` : "Recent Cases")
+        .setDescription(cases.map((entry) => [
+          `**Case #${entry.id} - ${entry.type}**`,
+          `User: <@${entry.userId}> (${entry.userId})`,
+          `Moderator: <@${entry.moderatorId}>`,
           `Reason: ${entry.reason}`,
-          `Moderator: <@${entry.moderatorId}>`
-        ].join("\n")).join("\n\n").slice(0, 4000))
+          entry.details ? `Details: ${entry.details}` : null,
+          `Time: <t:${Math.floor(entry.at / 1000)}:R>`
+        ].filter(Boolean).join("\n")).join("\n\n").slice(0, 4000))
     ]
   });
 }
@@ -1991,16 +2085,27 @@ async function handlePunishments(message) {
 async function handleManualTempBan(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can tempban users.");
 
-  const user = message.mentions.users.first();
+  const user = await resolveUserArgument(message, args[0]);
   const days = Number(args[1] || 14);
   const reason = args.slice(2).join(" ") || "Manual temporary ban";
 
   if (!user || Number.isNaN(days) || days < 1) {
-    await message.reply("Usage: `!tempban @user days reason`");
+    await message.reply("Usage: `!tempban @user-or-id days reason`");
     return;
   }
 
   await applyTempBan(message.guild, user, days, reason, message.author);
+  const data = getGuildData(message.guild.id);
+  const caseId = addCase(data, {
+    type: "Tempban",
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason,
+    details: `${days} day(s)`
+  });
+  saveGuildData(message.guild.id, data);
   await message.reply(`Temporarily banned **${user.tag}** for **${days} day(s)**.`);
 }
 
@@ -2016,16 +2121,24 @@ async function handleUnTempBan(message, args) {
   const data = getGuildData(message.guild.id);
   data.tempBans ||= {};
   delete data.tempBans[userId];
+  const caseId = addCase(data, {
+    type: "Untempban",
+    userId,
+    userTag: userId,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason: "Temporary ban removed"
+  });
   saveGuildData(message.guild.id, data);
   await message.guild.members.unban(userId, `Tempban removed by ${message.author.tag}`).catch(() => {});
-  await logTo(message.guild, "mod-logs", "Tempban Removed", [field("User ID", userId), field("Moderator", message.author.tag)]);
-  await message.reply("Tempban removed if that user was banned.");
+  await logTo(message.guild, "mod-logs", "Tempban Removed", [field("User ID", userId), field("Moderator", message.author.tag), field("Case", `#${caseId}`)]);
+  await message.reply(`Tempban removed if that user was banned. Case #${caseId}.`);
 }
 
 async function handleKick(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can kick users.");
-  const member = message.mentions.members.first();
-  if (!member) return message.reply("Usage: `!kick @user reason`");
+  const member = await resolveMemberArgument(message, args[0]);
+  if (!member) return message.reply("Usage: `!kick @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
   await member.send(`You were kicked from ${message.guild.name}: ${reason}`).catch(() => {});
   await member.kick(reason);
@@ -2035,24 +2148,65 @@ async function handleKick(message, args) {
 
 async function handleBan(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can ban users.");
-  const member = message.mentions.members.first();
-  if (!member) return message.reply("Usage: `!ban @user reason`");
+  const user = await resolveUserArgument(message, args[0]);
+  if (!user) return message.reply("Usage: `!ban @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
-  await member.send(`You were banned from ${message.guild.name}: ${reason}`).catch(() => {});
-  await member.ban({ reason });
-  await logModeration(message.guild, "Ban", member.user, message.author, reason);
-  await message.reply(`Banned ${member.user.tag}.`);
+  await user.send(`You were banned from ${message.guild.name}: ${reason}`).catch(() => {});
+  await message.guild.members.ban(user.id, { reason });
+  await logModeration(message.guild, "Ban", user, message.author, reason);
+  await message.reply(`Banned ${user.tag}.`);
 }
 
 async function handleTimeout(message, args) {
   if (!isModerator(message.member)) return message.reply("Only moderators can timeout users.");
-  const member = message.mentions.members.first();
+  const member = await resolveMemberArgument(message, args[0]);
   const minutes = Number(args[1] || 10);
-  if (!member || Number.isNaN(minutes)) return message.reply("Usage: `!timeout @user minutes reason`");
+  if (!member || Number.isNaN(minutes)) return message.reply("Usage: `!timeout @user-or-id minutes reason`");
   const reason = args.slice(2).join(" ") || "No reason provided";
   await member.timeout(minutes * 60 * 1000, reason);
   await logModeration(message.guild, "Timeout", member.user, message.author, `${minutes} minutes - ${reason}`);
   await message.reply(`Timed out ${member.user.tag}.`);
+}
+
+async function handleUnban(message, args) {
+  if (!isModerator(message.member)) return message.reply("Only moderators can unban users.");
+  const user = await resolveUserArgument(message, args[0]);
+  const userId = user?.id || args[0];
+  if (!userId) return message.reply("Usage: `!unban userId reason`");
+  const reason = args.slice(1).join(" ") || "No reason provided";
+  await message.guild.members.unban(userId, `${reason} - ${message.author.tag}`);
+  const data = getGuildData(message.guild.id);
+  const caseId = addCase(data, {
+    type: "Unban",
+    userId,
+    userTag: user?.tag || userId,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason
+  });
+  saveGuildData(message.guild.id, data);
+  await logTo(message.guild, "mod-logs", "Unban", [field("User ID", userId), field("Moderator", message.author.tag), field("Reason", `${reason} | Case #${caseId}`)]);
+  await message.reply(`Unbanned user ID ${userId}. Case #${caseId}.`);
+}
+
+async function handleUntimeout(message, args) {
+  if (!isModerator(message.member)) return message.reply("Only moderators can remove timeouts.");
+  const member = await resolveMemberArgument(message, args[0]);
+  if (!member) return message.reply("Usage: `!untimeout @user-or-id reason`");
+  const reason = args.slice(1).join(" ") || "No reason provided";
+  await member.timeout(null, `${reason} - ${message.author.tag}`);
+  const data = getGuildData(message.guild.id);
+  const caseId = addCase(data, {
+    type: "Untimeout",
+    userId: member.id,
+    userTag: member.user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason
+  });
+  saveGuildData(message.guild.id, data);
+  await logModeration(message.guild, "Untimeout", member.user, message.author, `${reason} | Case #${caseId}`);
+  await message.reply(`Removed timeout from ${member.user.tag}. Case #${caseId}.`);
 }
 
 async function logModeration(guild, action, user, moderator, reason) {
@@ -2062,16 +2216,72 @@ async function logModeration(guild, action, user, moderator, reason) {
   data.staffStats ||= {};
   staff.punishments = (staff.punishments || 0) + 1;
   data.staffStats[moderator.id] = staff;
+  if (!/case\s*#/i.test(reason)) {
+    const caseId = addCase(data, {
+      type: action,
+      userId: user.id,
+      userTag: user.tag,
+      moderatorId: moderator.id,
+      moderatorTag: moderator.tag,
+      reason
+    });
+    reason = `${reason} | Case #${caseId}`;
+  }
   saveGuildData(guild.id, data);
   await logTo(guild, "mod-logs", action, [field("User", `${user.tag} (${user.id})`), field("Moderator", `${moderator.tag}`), field("Reason", reason)]);
 }
 
+async function resolveUserArgument(message, value) {
+  const mentioned = message.mentions.users.first();
+  if (mentioned && (!value || value.includes(mentioned.id))) return mentioned;
+
+  const userId = cleanUserId(value);
+  if (!userId) return null;
+  return message.client.users.fetch(userId).catch(() => null);
+}
+
+async function resolveMemberArgument(message, value) {
+  const mentioned = message.mentions.members.first();
+  if (mentioned && (!value || value.includes(mentioned.id))) return mentioned;
+
+  const userId = cleanUserId(value);
+  if (!userId) return null;
+  return message.guild.members.fetch(userId).catch(() => null);
+}
+
+function cleanUserId(value = "") {
+  const match = String(value).match(/\d{15,25}/);
+  return match?.[0] || null;
+}
+
+function addCase(data, entry) {
+  data.cases ||= [];
+  const nextId = (data.nextCaseId || 1);
+  data.nextCaseId = nextId + 1;
+  data.cases.push({
+    id: nextId,
+    at: Date.now(),
+    ...entry
+  });
+  return nextId;
+}
+
 async function logExternalModeration(guild, action, user, moderator, reason) {
   const moderatorLabel = moderator ? `${moderator.tag} (${moderator.id})` : "Unknown from audit log";
+  const data = getGuildData(guild.id);
+  const caseId = addCase(data, {
+    type: `External ${action}`,
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: moderator?.id || "unknown",
+    moderatorTag: moderator?.tag || "Unknown",
+    reason: reason || "No reason provided"
+  });
+  saveGuildData(guild.id, data);
   await logTo(guild, "mod-logs", `External ${action}`, [
     field("User", `${user.tag} (${user.id})`),
     field("Moderator", moderatorLabel),
-    field("Reason", reason || "No reason provided")
+    field("Reason", `${reason || "No reason provided"} | Case #${caseId}`)
   ]);
 }
 
@@ -2233,7 +2443,7 @@ async function checkExpiredTempBans() {
   }
 }
 
-async function logPunishment(guild, user, moderator, ruleKey, punishment, reason, evidence, deleted, count) {
+async function logPunishment(guild, user, moderator, ruleKey, punishment, reason, evidence, deleted, count, caseId) {
   incrementStaffStat(guild.id, moderator.id, "punishments", 1);
   await logTo(guild, "mod-logs", "Punishment Applied", [
     field("User", `${user.tag} (${user.id})`),
@@ -2241,6 +2451,7 @@ async function logPunishment(guild, user, moderator, ruleKey, punishment, reason
     field("Rule", PUNISHMENT_RULES[ruleKey].label, true),
     field("Offense Count", count, true),
     field("Action", formatPunishment(punishment), true),
+    field("Case", `#${caseId}`, true),
     field("Reason", reason),
     field("Broken Message Deleted", deleted ? "Yes" : "No", true),
     field("Evidence", evidence.slice(0, 1000))
@@ -2347,9 +2558,19 @@ async function handleAutoMod(message, settings = {}) {
   });
 
   const punishment = rule.action || determineAutoModPunishment(record.strikes);
+  const caseId = addCase(data, {
+    type: `AutoMod ${formatPunishment(punishment)}`,
+    userId: message.author.id,
+    userTag: message.author.tag,
+    moderatorId: client.user.id,
+    moderatorTag: client.user.tag,
+    reason: `${rule.label}: ${result.reason}`,
+    details: `Grade ${rule.grade}; strikes ${record.strikes}; deleted message: ${deleted ? "yes" : "no"}`
+  });
   if (punishment.action === "warn") {
     data.warnings[message.author.id] ||= [];
     data.warnings[message.author.id].push({
+      caseId,
       reason: `AutoMod: ${rule.label} (${result.reason})`,
       moderatorId: client.user.id,
       at: now
@@ -2362,7 +2583,7 @@ async function handleAutoMod(message, settings = {}) {
   const actionError = await applyPunishmentAction(message.guild, message.author, message.member, punishment, `AutoMod: ${rule.label}. ${result.reason}`, client.user)
     .then(() => null)
     .catch((error) => error);
-  await logAutoModAction(message, rule, result, punishment, deleted, record.strikes);
+  await logAutoModAction(message, rule, result, punishment, deleted, record.strikes, caseId);
 
   if (actionError) {
     await logTo(message.guild, "mod-logs", "AutoMod Action Failed", [
@@ -2401,10 +2622,8 @@ function detectAutoModInfraction(message, settings = {}) {
     return { ruleKey: "repeatspam", reason: "Repeated the same message too many times.", delete: true };
   }
 
-  const letters = content.replace(/[^a-z]/gi, "");
-  const caps = content.replace(/[^A-Z]/g, "");
-  if (letters.length >= 18 && caps.length / letters.length >= 0.75) {
-    return { ruleKey: "caps", reason: "Too much uppercase text.", delete: false };
+  if (recent.length >= 7) {
+    return { ruleKey: "repeatspam", reason: "Too many messages in a short time.", delete: true };
   }
 
   const emojiCount = (content.match(/<a?:\w+:\d+>|[\u{1F300}-\u{1FAFF}]/gu) || []).length;
@@ -2457,7 +2676,7 @@ function determineAutoModPunishment(strikes) {
   return { action: "ban" };
 }
 
-async function logAutoModAction(message, rule, result, punishment, deleted, strikes) {
+async function logAutoModAction(message, rule, result, punishment, deleted, strikes, caseId) {
   await logTo(message.guild, "mod-logs", "AutoMod Action", [
     field("User", `${message.author.tag} (${message.author.id})`),
     field("Channel", `${message.channel}`),
@@ -2465,6 +2684,7 @@ async function logAutoModAction(message, rule, result, punishment, deleted, stri
     field("Grade", rule.grade, true),
     field("Current Strikes", strikes, true),
     field("Action", formatPunishment(punishment), true),
+    field("Case", `#${caseId}`, true),
     field("Message Deleted", deleted ? "Yes" : "No", true),
     field("Reason", result.reason),
     field("Content", (message.content || "No text content.").slice(0, 1000))
