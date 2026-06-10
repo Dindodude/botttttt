@@ -30,11 +30,12 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-10-staff-apps";
+const BOT_VERSION = "2026-06-10-staff-app-timeout";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
 const QUESTION_TIMEOUT = 2 * 60 * 1000;
+const STAFF_APP_QUESTION_TIMEOUT = 20 * 60 * 1000;
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 
 const ROLE_NAMES = {
@@ -1700,18 +1701,18 @@ async function handleStaffAppStart(interaction) {
   const resultChannel = interaction.guild.channels.cache.get(resultChannelId);
   if (!resultChannel) return interaction.reply({ content: "The staff application result channel no longer exists. Tell the owner to run `!staffapp` again.", ephemeral: true });
 
-  await interaction.reply({ content: "Check your DMs. You have 5 minutes for each question.", ephemeral: true });
+  await interaction.reply({ content: "Check your DMs. You have 20 minutes for each question.", ephemeral: true });
 
   const dm = await interaction.user.createDM().catch(() => null);
   if (!dm) {
     return interaction.followUp({ content: "I could not DM you. Please open your DMs and click the button again.", ephemeral: true }).catch(() => {});
   }
 
-  await dm.send(`Starting your ${BRAND} staff application. You have 5 minutes to answer each question.`).catch(() => null);
+  await dm.send(`Starting your ${BRAND} staff application. You have 20 minutes to answer each question.`).catch(() => null);
 
   const answers = [];
   for (const question of STAFF_APP_QUESTIONS) {
-    const answer = await askDmQuestion(dm, interaction.user.id, question, 5 * 60 * 1000);
+    const answer = await askDmQuestion(dm, interaction.user.id, question, STAFF_APP_QUESTION_TIMEOUT);
     if (!answer) {
       await dm.send("Application timed out. Click the application button again when you are ready.").catch(() => {});
       return;
