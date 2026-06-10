@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-07-mod-ticket-cleanup";
+const BOT_VERSION = "2026-06-10-command-automod-cases";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -227,17 +227,22 @@ const AUTOMOD_RULES = {
 const NSFW_PATTERN = /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|sex\s*(video|pic|image|link)|18\+)\b/i;
 const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-z0-9-]+/i;
 const URL_PATTERN = /https?:\/\/\S+/gi;
+const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
+const PLAYER_COMMAND_CHANNEL = "bot-commands";
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "start", "starthere", "ticketpanel", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "cases", "case", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildModeration,
     GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
+  partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.Reaction, Partials.User]
 });
 
 client.once("ready", () => {
@@ -272,16 +277,22 @@ client.on("messageCreate", async (message) => {
   const args = content.slice(prefix.length).trim().split(/\s+/);
   const command = args.shift()?.toLowerCase();
   if (!command) return;
+  if (!isAllowedCommandUse(message, command, args, settings)) {
+    await handleAutoMod(message, settings).catch(() => {});
+    return;
+  }
 
   try {
     if (command === "ping") return handlePing(message);
     if (command === "version") return handleVersion(message);
     if (command === "commands") return handleCommands(message);
+    if (command === "staffcommands") return handleStaffCommands(message);
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
     if (command === "autorole") return handleAutoRole(message, args);
     if (command === "automod") return handleAutoModCommand(message, args);
     if (command === "badword") return handleBadWordCommand(message, args);
+    if (command === "reactionroles") return handleReactionRoles(message);
     if ((command === "start" && args[0]?.toLowerCase() === "here") || command === "starthere") return handleStartHereCommand(message);
     if (command === "rules") return handleRules(message);
     if (command === "help") return handleHelp(message);
@@ -306,7 +317,7 @@ client.on("messageCreate", async (message) => {
     if (command === "unwarn") return handleUnwarn(message, args);
     if (command === "warnings") return handleWarnings(message);
     if (command === "punish") return handlePunish(message, args);
-    if (command === "cases" || command === "punishments") return handleCases(message);
+    if (command === "cases" || command === "case" || command === "punishments") return handleCases(message);
     if (command === "tempban") return handleManualTempBan(message, args);
     if (command === "untempban") return handleUnTempBan(message, args);
     if (command === "kick") return handleKick(message, args);
@@ -314,6 +325,7 @@ client.on("messageCreate", async (message) => {
     if (command === "unban") return handleUnban(message, args);
     if (command === "timeout") return handleTimeout(message, args);
     if (command === "untimeout") return handleUntimeout(message, args);
+    if (command === "purge" || command === "clear") return handlePurge(message, args);
     if (command === "backup") return handleBackup(message);
     if (command === "restorebackup") return handleRestoreBackup(message, args);
     if (command === "configview") return handleConfigView(message);
@@ -401,6 +413,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("ticketclose:")) return closeTicket(interaction);
     if (interaction.customId.startsWith("ticketdelete:")) return deleteTicket(interaction);
     if (interaction.customId.startsWith("tickettranscript:")) return handleTicketTranscript(interaction);
+    if (interaction.customId.startsWith("rr:")) return handleReactionRoleButton(interaction);
     if (interaction.customId.startsWith("guide:")) return handleGuideButton(interaction);
   } catch (error) {
     console.error(error);
@@ -421,6 +434,24 @@ function isStaff(member) {
 
 function isModerator(member) {
   return isStaff(member) || member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+}
+
+function isBotCommandChannel(channel) {
+  return stripStyle(channel.name) === PLAYER_COMMAND_CHANNEL;
+}
+
+function isAllowedCommandUse(message, command, args, settings = {}) {
+  const commandKey = command === "start" && args[0]?.toLowerCase() === "here" ? "start" : command;
+  const adminOnly = ADMIN_COMMANDS.has(commandKey);
+  const staffOnly = STAFF_COMMANDS.has(commandKey);
+
+  if (adminOnly) return isAdmin(message.member);
+  if (staffOnly) return isStaff(message.member);
+  if (isStaff(message.member)) return true;
+
+  const allowedChannelId = settings.botCommandsChannelId;
+  if (allowedChannelId && message.channel.id === allowedChannelId) return true;
+  return isBotCommandChannel(message.channel);
 }
 
 function findRole(guild, name) {
@@ -691,6 +722,7 @@ async function handleKrUpdate(message) {
   const welcome = findChannel(message.guild, "welcome");
   const logs = findChannel(message.guild, "logs");
   const joinLogs = findChannel(message.guild, "join-logs");
+  const botCommands = findChannel(message.guild, "bot-commands");
   const player = findRole(message.guild, ROLE_NAMES.player);
   const announcement = findRole(message.guild, ROLE_NAMES.announcement);
 
@@ -700,6 +732,7 @@ async function handleKrUpdate(message) {
     welcomeChannelId: welcome?.id || null,
     logsChannelId: logs?.id || null,
     joinLogsChannelId: joinLogs?.id || null,
+    botCommandsChannelId: botCommands?.id || null,
     autoRoleId: player?.id || null,
     announcementRoleId: announcement?.id || null,
     autoRoleIds: [player?.id, announcement?.id].filter(Boolean),
@@ -1431,14 +1464,28 @@ async function handleVersion(message) {
 async function handleCommands(message) {
   await message.reply({
     embeds: [
-      baseEmbed(`${BRAND} Commands`)
-        .setDescription("If this message appears, prefix commands are working.")
+      baseEmbed(`${BRAND} Player Commands`)
+        .setDescription("Player commands work in #bot-commands.")
         .addFields(
-          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!rules`"),
-          field("General", "`!ping`, `!commands`, `!help`, `!review`, `!suggest`, `!bugreport`"),
-          field("Support", "`!ticketpanel`, `!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
-          field("Testing", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation", "`!staffstats`, `!punish`, `!cases`, `!warn`, `!unwarn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`")
+          field("General", "`!ping`, `!commands`, `!help`, `!review`, `!suggest`, `!bugreport`, `!serverstats`"),
+          field("Support", "Use the ticket panel in #tickets when you need private help."),
+          field("Notes", "Staff commands are hidden from players. Staff can use `!staffcommands`.")
+        )
+    ]
+  });
+}
+
+async function handleStaffCommands(message) {
+  if (!isStaff(message.member)) return;
+
+  await message.reply({
+    embeds: [
+      baseEmbed(`${BRAND} Staff Commands`)
+        .addFields(
+          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!ticketpanel`, `!rules`"),
+          field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
+          field("Moderation", "`!purge 25`, `!clear 25`, `!warn @user/id reason`, `!unwarn @user/id`, `!punish @user/id rule reason`, `!cases @user/id`, `!case 12`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`, `!tempban`, `!untempban`"),
+          field("Staff Stats", "`!staffstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
     ]
   });
@@ -1502,6 +1549,79 @@ async function handleReview(message) {
   data.reviews.push({ userId: message.author.id, rating, reason: reasonReply.content.trim(), at: Date.now() });
   data.analytics.reviews += 1;
   saveGuildData(message.guild.id, data);
+}
+
+async function handlePurge(message, args) {
+  if (!isModerator(message.member) || !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) return;
+
+  const amount = Number(args[0] || 0);
+  if (!amount || Number.isNaN(amount) || amount < 1 || amount > 100) {
+    return message.reply("Usage: `!purge 1-100` or `!clear 1-100`");
+  }
+
+  const deleted = await message.channel.bulkDelete(amount + 1, true).catch(async (error) => {
+    await message.reply(`Could not purge messages: ${error.message}`);
+    return null;
+  });
+  if (!deleted) return;
+
+  await logTo(message.guild, "mod-logs", "Messages Purged", [
+    field("Channel", `${message.channel}`),
+    field("Moderator", message.author.tag),
+    field("Amount", Math.max(deleted.size - 1, 0), true)
+  ]);
+}
+
+async function handleReactionRoles(message) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can create reaction role panels.");
+
+  const mentionedRoles = [...message.mentions.roles.values()];
+  const roles = mentionedRoles.length
+    ? mentionedRoles
+    : [findRole(message.guild, ROLE_NAMES.announcement)].filter(Boolean);
+
+  const safeRoles = roles.filter((role) => !isUnsafeAutoRole(role));
+  if (!safeRoles.length) return message.reply("Mention at least one safe role. Example: `!reactionroles @Announcement Ping`");
+
+  const components = [];
+  for (let i = 0; i < safeRoles.length; i += 5) {
+    components.push(new ActionRowBuilder().addComponents(
+      safeRoles.slice(i, i + 5).map((role) => new ButtonBuilder()
+        .setCustomId(`rr:${role.id}`)
+        .setLabel(role.name.replace(/^.+?\s/, "").slice(0, 80))
+        .setStyle(ButtonStyle.Secondary))
+    ));
+  }
+
+  await message.channel.send({
+    embeds: [
+      baseEmbed("Reaction Roles")
+        .setDescription("Click a button to add or remove that role.")
+        .addFields(field("Roles", safeRoles.map((role) => `<@&${role.id}>`).join("\n")))
+    ],
+    components
+  });
+  await message.reply("Reaction role panel posted.");
+}
+
+async function handleReactionRoleButton(interaction) {
+  const roleId = interaction.customId.split(":")[1];
+  const role = interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null);
+  if (!role || isUnsafeAutoRole(role)) return interaction.reply({ content: "That role is not available.", ephemeral: true });
+
+  const member = interaction.member;
+  const botMember = interaction.guild.members.me;
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles) || botMember.roles.highest.comparePositionTo(role) <= 0) {
+    return interaction.reply({ content: "I cannot manage that role. Move my bot role above it.", ephemeral: true });
+  }
+
+  if (member.roles.cache.has(role.id)) {
+    await member.roles.remove(role, "Reaction role toggle");
+    return interaction.reply({ content: `Removed ${role.name}.`, ephemeral: true });
+  }
+
+  await member.roles.add(role, "Reaction role toggle");
+  return interaction.reply({ content: `Added ${role.name}.`, ephemeral: true });
 }
 
 async function handleTicketPanel(message) {
@@ -2058,8 +2178,27 @@ async function handleCases(message) {
   if (!isModerator(message.member)) return message.reply("Only moderators can view cases.");
 
   const targetArg = [...message.content.trim().split(/\s+/)].slice(1)[0];
-  const user = await resolveUserArgument(message, targetArg);
+  const caseNumber = Number(String(targetArg || "").replace("#", ""));
   const data = getGuildData(message.guild.id);
+
+  if (caseNumber && !Number.isNaN(caseNumber)) {
+    const entry = (data.cases || []).find((item) => Number(item.id) === caseNumber);
+    if (!entry) return message.reply(`Case #${caseNumber} was not found.`);
+    return message.reply({
+      embeds: [
+        baseEmbed(`Case #${entry.id} - ${entry.type}`)
+          .addFields(
+            field("User", `<@${entry.userId}> (${entry.userId})`),
+            field("Moderator", entry.moderatorId === "unknown" ? "Unknown" : `<@${entry.moderatorId}> (${entry.moderatorId})`),
+            field("Reason", entry.reason),
+            field("Details", entry.details || "None"),
+            field("Time", `<t:${Math.floor(entry.at / 1000)}:F>`)
+          )
+      ]
+    });
+  }
+
+  const user = await resolveUserArgument(message, targetArg);
   const cases = (data.cases || []).filter((entry) => !user || entry.userId === user.id).slice(-15).reverse();
 
   if (!cases.length) {
@@ -2596,7 +2735,7 @@ async function handleAutoMod(message, settings = {}) {
 
 function detectAutoModInfraction(message, settings = {}) {
   const content = message.content || "";
-  const urls = content.match(URL_PATTERN) || [];
+  const urls = (content.match(URL_PATTERN) || []).filter((url) => !MEDIA_URL_PATTERN.test(url));
   const mentionCount = message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0);
   const recent = getRecentAuthorMessages(message);
   const badWord = findBadWordMatch(content, settings.badWords);
@@ -2613,16 +2752,16 @@ function detectAutoModInfraction(message, settings = {}) {
     return { ruleKey: "massmentions", reason: `${mentionCount} mention(s) in one message or too many mentions in a short window.`, delete: true };
   }
 
-  if (DISCORD_INVITE_PATTERN.test(content) || urls.length >= 3 || recent.reduce((total, entry) => total + (entry.urls || 0), urls.length) >= 5) {
+  if (DISCORD_INVITE_PATTERN.test(content) || urls.length >= 5 || recent.reduce((total, entry) => total + (entry.urls || 0), urls.length) >= 8) {
     return { ruleKey: "linkspam", reason: "Discord invite, advertising link, or too many links in a short window.", delete: true };
   }
 
   const repeated = recent.filter((entry) => entry.normalized && entry.normalized === normalizeSpamText(content)).length;
-  if (content.length >= 4 && repeated >= 3) {
+  if (content.length >= 4 && repeated >= 4) {
     return { ruleKey: "repeatspam", reason: "Repeated the same message too many times.", delete: true };
   }
 
-  if (recent.length >= 7) {
+  if (recent.length >= 9) {
     return { ruleKey: "repeatspam", reason: "Too many messages in a short time.", delete: true };
   }
 
@@ -2643,7 +2782,7 @@ function getRecentAuthorMessages(message) {
     at: now,
     normalized: normalizeSpamText(message.content),
     mentions: message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0),
-    urls: (message.content.match(URL_PATTERN) || []).length
+    urls: (message.content.match(URL_PATTERN) || []).filter((url) => !MEDIA_URL_PATTERN.test(url)).length
   });
   data.autoModRecent[message.author.id] = userRecent.slice(-10);
   saveGuildData(message.guild.id, data);
