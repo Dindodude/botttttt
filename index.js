@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-10-command-automod-cases";
+const BOT_VERSION = "2026-06-10-staff-apps";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -229,8 +229,21 @@ const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.co
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "start", "starthere", "ticketpanel", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
 const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "cases", "case", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const STAFF_APP_QUESTIONS = [
+  "What is your Discord username and ID?",
+  "What is your age?",
+  "What is your timezone?",
+  "How often will you be able to take tickets and moderate the channels?",
+  "How much active are you on a scale from 1 to 10?",
+  "Do you have any prior experience of being staff? If yes, list them. If not, put N/A.",
+  "Why would you like to become a moderator for Kaiju Reincarnated? Please list a detailed response.",
+  "If two members were arguing in public channels, how would you handle the situation?",
+  "What would you do if someone breaks the rules, but they are your friends?",
+  "What would you do if you caught another mod abusing their powers?",
+  "What would you do if a member DMs you to report another member?"
+];
 
 const client = new Client({
   intents: [
@@ -299,6 +312,7 @@ client.on("messageCreate", async (message) => {
     if (command === "suggest") return handleSuggest(message, args);
     if (command === "review") return handleReview(message);
     if (command === "ticketpanel") return handleTicketPanel(message);
+    if (command === "staffapp") return handleStaffAppSetup(message);
     if (command === "bugreport") return handleBugReport(message);
     if (command === "event") return handleEvent(message);
     if (command === "endevent") return handleEndEvent(message);
@@ -414,6 +428,8 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("ticketdelete:")) return deleteTicket(interaction);
     if (interaction.customId.startsWith("tickettranscript:")) return handleTicketTranscript(interaction);
     if (interaction.customId.startsWith("rr:")) return handleReactionRoleButton(interaction);
+    if (interaction.customId.startsWith("staffapp:start:")) return handleStaffAppStart(interaction);
+    if (interaction.customId.startsWith("staffappreview:")) return handleStaffAppReview(interaction);
     if (interaction.customId.startsWith("guide:")) return handleGuideButton(interaction);
   } catch (error) {
     console.error(error);
@@ -426,6 +442,10 @@ client.on("interactionCreate", async (interaction) => {
 function isAdmin(member) {
   return member.permissions.has(PermissionsBitField.Flags.Administrator)
     || ADMIN_ROLES.some((name) => member.roles.cache.some((role) => role.name === name));
+}
+
+function isOwner(member) {
+  return member.guild.ownerId === member.id || member.roles.cache.some((role) => role.name === ROLE_NAMES.owner);
 }
 
 function isStaff(member) {
@@ -1482,7 +1502,7 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!ticketpanel`, `!rules`"),
+          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!rules`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
           field("Moderation", "`!purge 25`, `!clear 25`, `!warn @user/id reason`, `!unwarn @user/id`, `!punish @user/id rule reason`, `!cases @user/id`, `!case 12`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`, `!tempban`, `!untempban`"),
           field("Staff Stats", "`!staffstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
@@ -1635,6 +1655,161 @@ async function handleTicketPanel(message) {
     embeds: [baseEmbed("Support Tickets").setDescription("Choose the ticket type that matches what you need.")],
     components: [row]
   });
+}
+
+async function handleStaffAppSetup(message) {
+  if (!isOwner(message.member)) return message.reply("Only the server owner can use `!staffapp`.");
+
+  await message.reply("Mention the channel where staff application results should be sent.");
+  const reply = await collectOneMessage(message.channel, message.author.id, QUESTION_TIMEOUT);
+  if (!reply) return message.reply("Staff application setup timed out.");
+
+  const resultChannel = reply.mentions.channels.first()
+    || message.guild.channels.cache.get(cleanChannelId(reply.content));
+
+  if (!resultChannel || resultChannel.type !== ChannelType.GuildText) {
+    return message.reply("That is not a valid text channel. Run `!staffapp` again and mention a channel.");
+  }
+
+  const data = getGuildData(message.guild.id);
+  data.staffAppConfig ||= {};
+  data.staffAppConfig.resultChannelId = resultChannel.id;
+  saveGuildData(message.guild.id, data);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`staffapp:start:${resultChannel.id}`)
+      .setLabel("Apply for Staff")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  await message.channel.send({
+    embeds: [
+      baseEmbed("Staff Applications")
+        .setDescription("Click the button below to apply for staff. The bot will DM you the questions one by one.")
+        .addFields(field("Results Channel", `${resultChannel}`))
+    ],
+    components: [row]
+  });
+
+  await message.reply(`Staff application panel posted. Results will go to ${resultChannel}.`);
+}
+
+async function handleStaffAppStart(interaction) {
+  const resultChannelId = interaction.customId.split(":")[2];
+  const resultChannel = interaction.guild.channels.cache.get(resultChannelId);
+  if (!resultChannel) return interaction.reply({ content: "The staff application result channel no longer exists. Tell the owner to run `!staffapp` again.", ephemeral: true });
+
+  await interaction.reply({ content: "Check your DMs. You have 5 minutes for each question.", ephemeral: true });
+
+  const dm = await interaction.user.createDM().catch(() => null);
+  if (!dm) {
+    return interaction.followUp({ content: "I could not DM you. Please open your DMs and click the button again.", ephemeral: true }).catch(() => {});
+  }
+
+  await dm.send(`Starting your ${BRAND} staff application. You have 5 minutes to answer each question.`).catch(() => null);
+
+  const answers = [];
+  for (const question of STAFF_APP_QUESTIONS) {
+    const answer = await askDmQuestion(dm, interaction.user.id, question, 5 * 60 * 1000);
+    if (!answer) {
+      await dm.send("Application timed out. Click the application button again when you are ready.").catch(() => {});
+      return;
+    }
+    answers.push(answer);
+  }
+
+  const appId = Date.now().toString(36);
+  const data = getGuildData(interaction.guild.id);
+  data.staffApplications ||= {};
+  data.staffApplications[appId] = {
+    id: appId,
+    userId: interaction.user.id,
+    userTag: interaction.user.tag,
+    answers,
+    status: "Pending",
+    resultChannelId,
+    createdAt: Date.now()
+  };
+  saveGuildData(interaction.guild.id, data);
+
+  const row = buildStaffAppReviewRow(interaction.user.id, appId);
+  const sent = await resultChannel.send({
+    embeds: [buildStaffApplicationEmbed(interaction.user, answers, "Pending")],
+    components: [row]
+  }).catch(() => null);
+
+  if (sent) {
+    data.staffApplications[appId].messageId = sent.id;
+    saveGuildData(interaction.guild.id, data);
+    await dm.send("Your staff application was submitted. Staff will review it soon.").catch(() => {});
+  } else {
+    await dm.send("I could not submit your application because the result channel is unavailable. Please tell staff.").catch(() => {});
+  }
+}
+
+async function handleStaffAppReview(interaction) {
+  if (!isOwner(interaction.member)) return interaction.reply({ content: "Only the server owner can review staff applications.", ephemeral: true });
+
+  const [, action, userId, appId] = interaction.customId.split(":");
+  const data = getGuildData(interaction.guild.id);
+  const app = data.staffApplications?.[appId];
+  if (!app) return interaction.reply({ content: "That application record was not found.", ephemeral: true });
+
+  let status = "Pending";
+  let dmText = "";
+
+  if (action === "approve") {
+    status = "Approved";
+    dmText = `Your staff application for ${interaction.guild.name} was approved. Welcome to the team.`;
+    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    const role = findRole(interaction.guild, ROLE_NAMES.trialMod);
+    if (member && role) {
+      const botMember = interaction.guild.members.me;
+      if (botMember.permissions.has(PermissionFlagsBits.ManageRoles) && botMember.roles.highest.comparePositionTo(role) > 0) {
+        await member.roles.add(role, "Staff application approved").catch(() => {});
+      }
+    }
+  }
+
+  if (action === "decline") {
+    status = "Declined";
+    dmText = `Your staff application for ${interaction.guild.name} was declined.`;
+  }
+
+  if (action === "interview") {
+    status = "Interview";
+    dmText = `Staff wants to interview you for your ${interaction.guild.name} staff application. Please wait for the owner to contact you.`;
+  }
+
+  app.status = status;
+  app.reviewedBy = interaction.user.id;
+  app.reviewedAt = Date.now();
+  saveGuildData(interaction.guild.id, data);
+
+  const applicant = await interaction.client.users.fetch(userId).catch(() => null);
+  if (applicant && dmText) await applicant.send(dmText).catch(() => {});
+
+  await interaction.update({
+    embeds: [buildStaffApplicationEmbed(applicant || { tag: app.userTag, id: userId }, app.answers, status)],
+    components: [buildStaffAppReviewRow(userId, appId)]
+  });
+}
+
+function buildStaffApplicationEmbed(user, answers, status) {
+  const color = status === "Approved" ? "#22c55e" : status === "Declined" ? "#ef4444" : status === "Interview" ? "#f59e0b" : COLOR;
+  return baseEmbed(`Staff Application - ${status}`, color)
+    .setDescription(`Applicant: <@${user.id}> (${user.tag || user.id})`)
+    .addFields(STAFF_APP_QUESTIONS.map((question, index) => field(`${index + 1}. ${question}`, (answers[index] || "No answer").slice(0, 300))))
+    .setFooter({ text: "Owner-only review buttons. Interview can be changed later." });
+}
+
+function buildStaffAppReviewRow(userId, appId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`staffappreview:approve:${userId}:${appId}`).setLabel("Approved").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`staffappreview:decline:${userId}:${appId}`).setLabel("Decline").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`staffappreview:interview:${userId}:${appId}`).setLabel("Interview").setStyle(ButtonStyle.Primary)
+  );
 }
 
 async function handleTicketButton(interaction) {
@@ -2659,6 +2834,26 @@ async function ask(message, question, validate = () => true) {
     return null;
   }
   return reply;
+}
+
+async function collectOneMessage(channel, userId, timeout = QUESTION_TIMEOUT) {
+  const collected = await channel.awaitMessages({
+    filter: (reply) => reply.author.id === userId,
+    max: 1,
+    time: timeout
+  }).catch(() => null);
+  return collected?.first() || null;
+}
+
+async function askDmQuestion(dm, userId, question, timeout) {
+  await dm.send(question).catch(() => null);
+  const reply = await collectOneMessage(dm, userId, timeout);
+  return reply?.content?.trim() || null;
+}
+
+function cleanChannelId(value = "") {
+  const match = String(value).match(/\d{15,25}/);
+  return match?.[0] || null;
 }
 
 async function logTo(guild, channelName, title, fields) {
