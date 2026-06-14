@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-13-invite-only-automod";
+const BOT_VERSION = "2026-06-13-slur-nsfw-automod";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -218,9 +218,17 @@ const PUNISHMENT_RULES = {
   impersonation: { label: "Impersonating staff", first: { action: "tempban", days: 14 } }
 };
 const AUTOMOD_RULES = {
-  invite: { label: "Discord invite link", delete: true, action: { action: "warn" } }
+  invite: { label: "Discord invite link", delete: true, action: { action: "warn" } },
+  blockedterm: { label: "Blocked slur/NSFW term", delete: true, action: { action: "warn" } }
 };
-const NSFW_PATTERN = /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|sex\s*(video|pic|image|link)|18\+)\b/i;
+const BLOCKED_TERM_PATTERNS = [
+  /\bn[\W_]*i[\W_]*g[\W_]*g[\W_]*(a|e[\W_]*r|u[\W_]*h|o)\b/i,
+  /\bf[\W_]*a[\W_]*g([\W_]*g[\W_]*o[\W_]*t)?\b/i,
+  /\br[\W_]*e[\W_]*t[\W_]*a[\W_]*r[\W_]*d\b/i,
+  /\bk[\W_]*y[\W_]*s\b/i,
+  /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|18\+)\b/i,
+  /\bsex[\W_]*(video|pic|image|link|content)\b/i
+];
 const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-z0-9-]+/i;
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
@@ -947,8 +955,8 @@ async function handleAutoModCommand(message, args) {
         baseEmbed("AutoMod Settings")
           .addFields(
             field("Status", settings.autoModEnabled === false ? "Disabled" : "Enabled", true),
-            field("Filter", "Only Discord server invite links are blocked."),
-            field("Action", "Deletes the invite message, warns the user, and logs a case."),
+            field("Filter", "Blocks Discord server invite links plus severe slur/NSFW terms."),
+            field("Action", "Deletes the message, warns the user, and logs a case."),
             field("Commands", "`!automod on`, `!automod off`, `!automod reset @user`")
           )
       ]
@@ -2938,7 +2946,7 @@ async function handleAutoMod(message, settings = {}) {
 
   const punishment = rule.action;
   const caseId = addCase(data, {
-    type: "AutoMod Invite Block",
+    type: result.ruleKey === "invite" ? "AutoMod Invite Block" : "AutoMod Blocked Term",
     userId: message.author.id,
     userTag: message.author.tag,
     moderatorId: client.user.id,
@@ -2957,15 +2965,15 @@ async function handleAutoMod(message, settings = {}) {
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
 
-  await message.author.send(`Your message in ${message.guild.name} was removed because Discord server invite links are not allowed.`).catch(() => {});
+  await message.author.send(`Your message in ${message.guild.name} was removed because it broke the server AutoMod filter.`).catch(() => {});
   await logAutoModAction(message, rule, result, punishment, deleted, caseId);
 }
 
 function detectAutoModInfraction(message) {
   const content = message.content || "";
-  return DISCORD_INVITE_PATTERN.test(content)
-    ? { ruleKey: "invite", reason: "Discord server invite link detected." }
-    : null;
+  if (DISCORD_INVITE_PATTERN.test(content)) return { ruleKey: "invite", reason: "Discord server invite link detected." };
+  if (BLOCKED_TERM_PATTERNS.some((pattern) => pattern.test(content))) return { ruleKey: "blockedterm", reason: "Blocked slur or NSFW term detected." };
+  return null;
 }
 
 function getRecentAuthorMessages(message) {
