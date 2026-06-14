@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-13-slur-nsfw-automod";
+const BOT_VERSION = "2026-06-14-command-config-cases";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -233,8 +233,8 @@ const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.co
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
-const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "cases", "case", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
   "What is your age?",
@@ -302,13 +302,14 @@ client.on("messageCreate", async (message) => {
   try {
     if (command === "ping") return handlePing(message);
     if (command === "version") return handleVersion(message);
-    if (command === "commands") return handleCommands(message);
-    if (command === "staffcommands") return handleStaffCommands(message);
+    if (command === "commands" || command === "command") return handleCommands(message);
+    if (command === "staffcommands" || command === "staffcommand") return handleStaffCommands(message);
     if (command === "krupdate" || command === "newplayersetup") return handleKrUpdate(message);
     if (command === "rolesetup") return handleRoleSetup(message);
     if (command === "autorole") return handleAutoRole(message, args);
     if (command === "automod") return handleAutoModCommand(message, args);
     if (command === "badword") return handleBadWordCommand(message, args);
+    if (command === "commandconfigure") return handleCommandConfigure(message, args);
     if (command === "reactionroles") return handleReactionRoles(message);
     if ((command === "start" && args[0]?.toLowerCase() === "here") || command === "starthere") return handleStartHereCommand(message);
     if (command === "rules") return handleRules(message);
@@ -336,6 +337,7 @@ client.on("messageCreate", async (message) => {
     if (command === "warnings") return handleWarnings(message);
     if (command === "punish") return handlePunish(message, args);
     if (command === "cases" || command === "case" || command === "punishments") return handleCases(message);
+    if (command === "removecase") return handleRemoveCase(message, args);
     if (command === "tempban") return handleManualTempBan(message, args);
     if (command === "untempban") return handleUnTempBan(message, args);
     if (command === "kick") return handleKick(message, args);
@@ -514,7 +516,7 @@ function canUseStaffCommand(member, command) {
   if (["staffcommands", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warnings", "cases", "case", "punishments"].includes(command)) return true;
   if (["warn", "punish"].includes(command)) return canWarn(member);
   if (["timeout", "untimeout"].includes(command)) return canTimeout(member);
-  if (["unwarn"].includes(command)) return canManageWarnings(member);
+  if (["unwarn", "removecase"].includes(command)) return canManageWarnings(member);
   if (["purge", "clear"].includes(command)) return canPurge(member);
   if (["kick"].includes(command)) return canKick(member);
   if (["ban", "unban", "tempban", "untempban"].includes(command)) return canBan(member);
@@ -1030,6 +1032,33 @@ async function handleBadWordCommand(message, args) {
   return message.reply(current.includes(phrase) ? `Removed \`${phrase}\` from the bad word filter.` : `\`${phrase}\` was not in the bad word filter.`);
 }
 
+async function handleCommandConfigure(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!commandconfigure`.");
+
+  if ((args[0] || "").toLowerCase() === "status") {
+    const settings = getGuildSettings(message.guild.id) || {};
+    const channel = settings.botCommandsChannelId ? message.guild.channels.cache.get(settings.botCommandsChannelId) : findChannel(message.guild, PLAYER_COMMAND_CHANNEL);
+    return message.reply(`Player command channel: ${channel || "not set"}.`);
+  }
+
+  const initialChannel = message.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(args.join(" ")));
+  if (!initialChannel) await message.reply("Mention the channel where regular player commands should work, like `#bot-commands`.");
+  const reply = initialChannel ? null : await collectOneMessage(message.channel, message.author.id, QUESTION_TIMEOUT);
+  const channel = initialChannel || reply?.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(reply?.content || ""));
+
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    return message.reply("That was not a valid text channel. Run `!commandconfigure` again and mention the channel.");
+  }
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  saveGuildSettings(message.guild.id, {
+    ...settings,
+    botCommandsChannelId: channel.id
+  });
+
+  await message.reply(`Regular player commands will now only work in ${channel}. Mod+ and staff permission commands can still be used in chat based on role permissions.`);
+}
+
 async function handleStartHereCommand(message) {
   if (!isAdmin(message.member)) return message.reply("Only admins can use `!start here`.");
 
@@ -1531,12 +1560,16 @@ async function handleVersion(message) {
 }
 
 async function handleCommands(message) {
+  const settings = getGuildSettings(message.guild.id) || {};
+  const commandChannel = settings.botCommandsChannelId ? message.guild.channels.cache.get(settings.botCommandsChannelId) : findChannel(message.guild, PLAYER_COMMAND_CHANNEL);
   await message.reply({
     embeds: [
       baseEmbed(`${BRAND} Player Commands`)
-        .setDescription("Player commands work in #bot-commands.")
+        .setDescription(`Player commands work in ${commandChannel || "#bot-commands"}.`)
         .addFields(
-          field("General", "`!ping`, `!commands`, `!help`, `!review`, `!suggest`, `!bugreport`, `!serverstats`"),
+          field("General", "`!ping`, `!version`, `!commands`, `!help`, `!rules`, `!serverstats`"),
+          field("Community", "`!review`, `!suggest [idea]`, `!bugreport`"),
+          field("Levels", "`!rank`, `!level`, `!leaderboard` are disabled because Noctaly handles levels."),
           field("Support", "Use the ticket panel in #tickets when you need private help."),
           field("Notes", "Staff commands are hidden from players. Staff can use `!staffcommands`.")
         )
@@ -1551,11 +1584,12 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!rules`"),
-          field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
-          field("Trial Mod", "`!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, ticket commands"),
-          field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
-          field("Staff Stats", "`!staffstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
+          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
+          field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
+          field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
+          field("Trial Mod", "`!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
+          field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
+          field("Events/Stats", "`!event`, `!endevent`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
     ]
   });
@@ -1566,12 +1600,8 @@ async function handleHelp(message) {
     embeds: [
       baseEmbed(`${BRAND} Help`)
         .addFields(
-          field("General Commands", "`!help`, `!review`, `!suggest`, `!bugreport`"),
-          field("Support Commands", "`!ticketpanel`"),
-          field("Game Commands", "`!event`, `!endevent`, `!serverstats`"),
-          field("Ticket Commands", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
-          field("Tester Commands", "`!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`"),
-          field("Moderation Commands", "`!staffstats`, `!autorole`, `!automod`, `!badword`, `!punish`, `!cases`, `!warn`, `!unwarn`, `!warnings`, `!tempban`, `!untempban`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`, `!rules`, `!analytics`")
+          field("Players", "Use `!commands` in the configured bot command channel."),
+          field("Staff", "Use `!staffcommands` to see setup, ticket, moderation, case, event, and config commands.")
         )
     ]
   });
@@ -2444,6 +2474,44 @@ async function handleCases(message) {
         ].filter(Boolean).join("\n")).join("\n\n").slice(0, 4000))
     ]
   });
+}
+
+async function handleRemoveCase(message, args) {
+  if (!canManageWarnings(message.member)) return message.reply("Only Moderator+ can remove cases.");
+
+  const user = await resolveUserArgument(message, args[0]);
+  const caseId = Number(String(args[1] || "").replace("#", ""));
+  if (!user || !caseId || Number.isNaN(caseId)) return message.reply("Usage: `!removecase @user-or-id caseNumber`");
+
+  const data = getGuildData(message.guild.id);
+  data.cases ||= [];
+  const index = data.cases.findIndex((entry) => Number(entry.id) === caseId && entry.userId === user.id);
+  if (index < 0) return message.reply(`Case #${caseId} was not found for ${user.tag}.`);
+
+  const [removed] = data.cases.splice(index, 1);
+  if (data.warnings?.[user.id]) {
+    data.warnings[user.id] = data.warnings[user.id].filter((warning) => Number(warning.caseId) !== caseId);
+  }
+
+  const auditCaseId = addCase(data, {
+    type: "Case Removed",
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason: `Removed case #${caseId}`,
+    details: `${removed.type}: ${removed.reason}`
+  });
+
+  saveGuildData(message.guild.id, data);
+  await logTo(message.guild, "mod-logs", "Case Removed", [
+    field("User", `${user.tag} (${user.id})`),
+    field("Removed Case", `#${caseId}`, true),
+    field("Audit Case", `#${auditCaseId}`, true),
+    field("Moderator", message.author.tag),
+    field("Original", `${removed.type}: ${removed.reason}`.slice(0, 1000))
+  ]);
+  await message.reply(`Removed case #${caseId} from ${user.tag}. Audit case #${auditCaseId} was created.`);
 }
 
 async function handleManualTempBan(message, args) {
