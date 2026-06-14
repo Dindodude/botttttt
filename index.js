@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-10-staff-app-timeout";
+const BOT_VERSION = "2026-06-13-staff-permission-sync";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -454,7 +454,37 @@ function isStaff(member) {
 }
 
 function isModerator(member) {
+  return isAdmin(member) || member.roles.cache.some((role) => role.name === ROLE_NAMES.mod)
+    || member.permissions.has(PermissionsBitField.Flags.KickMembers)
+    || member.permissions.has(PermissionsBitField.Flags.BanMembers);
+}
+
+function isTrialModerator(member) {
   return isStaff(member) || member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+}
+
+function canWarn(member) {
+  return isTrialModerator(member);
+}
+
+function canTimeout(member) {
+  return isTrialModerator(member) && member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+}
+
+function canManageWarnings(member) {
+  return isModerator(member);
+}
+
+function canKick(member) {
+  return isModerator(member) && member.permissions.has(PermissionsBitField.Flags.KickMembers);
+}
+
+function canBan(member) {
+  return isModerator(member) && member.permissions.has(PermissionsBitField.Flags.BanMembers);
+}
+
+function canPurge(member) {
+  return isModerator(member) && member.permissions.has(PermissionsBitField.Flags.ManageMessages);
 }
 
 function isBotCommandChannel(channel) {
@@ -467,12 +497,27 @@ function isAllowedCommandUse(message, command, args, settings = {}) {
   const staffOnly = STAFF_COMMANDS.has(commandKey);
 
   if (adminOnly) return isAdmin(message.member);
-  if (staffOnly) return isStaff(message.member);
+  if (staffOnly) return canUseStaffCommand(message.member, commandKey);
   if (isStaff(message.member)) return true;
 
   const allowedChannelId = settings.botCommandsChannelId;
   if (allowedChannelId && message.channel.id === allowedChannelId) return true;
   return isBotCommandChannel(message.channel);
+}
+
+function canUseStaffCommand(member, command) {
+  if (!isStaff(member)) return false;
+
+  if (["staffcommands", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warnings", "cases", "case", "punishments"].includes(command)) return true;
+  if (["warn", "punish"].includes(command)) return canWarn(member);
+  if (["timeout", "untimeout"].includes(command)) return canTimeout(member);
+  if (["unwarn"].includes(command)) return canManageWarnings(member);
+  if (["purge", "clear"].includes(command)) return canPurge(member);
+  if (["kick"].includes(command)) return canKick(member);
+  if (["ban", "unban", "tempban", "untempban"].includes(command)) return canBan(member);
+  if (["event", "endevent", "givepoint"].includes(command)) return isModerator(member);
+
+  return isModerator(member);
 }
 
 function findRole(guild, name) {
@@ -1289,7 +1334,7 @@ async function postStartGuide(guild, summary) {
 }
 
 async function handleRules(message) {
-  if (!isModerator(message.member)) {
+  if (!isStaff(message.member)) {
     await message.reply({ embeds: [buildRulesEmbed()] }).catch(() => {});
     return;
   }
@@ -1505,7 +1550,8 @@ async function handleStaffCommands(message) {
         .addFields(
           field("Setup", "`!krupdate`, `!start here`, `!rolesetup`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!rules`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`"),
-          field("Moderation", "`!purge 25`, `!clear 25`, `!warn @user/id reason`, `!unwarn @user/id`, `!punish @user/id rule reason`, `!cases @user/id`, `!case 12`, `!kick`, `!ban`, `!unban`, `!timeout`, `!untimeout`, `!tempban`, `!untempban`"),
+          field("Trial Mod", "`!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, ticket commands"),
+          field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
           field("Staff Stats", "`!staffstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
     ]
@@ -1573,7 +1619,7 @@ async function handleReview(message) {
 }
 
 async function handlePurge(message, args) {
-  if (!isModerator(message.member) || !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) return;
+  if (!canPurge(message.member)) return;
 
   const amount = Number(args[0] || 0);
   if (!amount || Number.isNaN(amount) || amount < 1 || amount > 100) {
@@ -2216,7 +2262,7 @@ async function handleServerStats(message) {
 }
 
 async function handleWarn(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can warn users.");
+  if (!canWarn(message.member)) return message.reply("Only staff with warning permission can warn users.");
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!warn @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
@@ -2239,14 +2285,14 @@ async function handleWarn(message, args) {
 }
 
 async function handleWarnings(message) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can view warnings.");
+  if (!canWarn(message.member)) return message.reply("Only staff can view warnings.");
   const user = await resolveUserArgument(message, [...message.content.trim().split(/\s+/)].slice(1)[0]) || message.author;
   const warnings = getGuildData(message.guild.id).warnings[user.id] || [];
   await message.reply({ embeds: [baseEmbed(`Warnings for ${user.tag}`).setDescription(warnings.map((warning, index) => `${index + 1}. Case #${warning.caseId || "old"} - ${warning.reason} - <@${warning.moderatorId}>`).join("\n") || "No warnings.")] });
 }
 
 async function handleUnwarn(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can remove warnings.");
+  if (!canManageWarnings(message.member)) return message.reply("Only Moderator+ can remove warnings.");
 
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!unwarn @user-or-id [warning number/case id] [reason]`");
@@ -2282,7 +2328,7 @@ async function handleUnwarn(message, args) {
 }
 
 async function handlePunish(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can use `!punish`.");
+  if (!canWarn(message.member)) return message.reply("Only staff with moderation permissions can use `!punish`.");
 
   const user = await resolveUserArgument(message, args[0]);
   const ruleKey = normalizePunishmentRule(args[1]);
@@ -2312,7 +2358,7 @@ async function handlePunish(message, args) {
   data.punishments ||= {};
   const record = data.punishments[user.id] ||= { history: [], counts: {} };
   const nextCount = (record.counts[ruleKey] || 0) + 1;
-  const punishment = determinePunishment(ruleKey, nextCount, severe);
+  const punishment = limitPunishmentForMember(determinePunishment(ruleKey, nextCount, severe), message.member);
   const reason = rawReason || PUNISHMENT_RULES[ruleKey].label;
   const evidence = referencedMessage?.content || "No replied message content.";
 
@@ -2351,7 +2397,7 @@ async function handlePunish(message, args) {
 }
 
 async function handleCases(message) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can view cases.");
+  if (!canWarn(message.member)) return message.reply("Only staff can view cases.");
 
   const targetArg = [...message.content.trim().split(/\s+/)].slice(1)[0];
   const caseNumber = Number(String(targetArg || "").replace("#", ""));
@@ -2398,7 +2444,7 @@ async function handleCases(message) {
 }
 
 async function handleManualTempBan(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can tempban users.");
+  if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can tempban users.");
 
   const user = await resolveUserArgument(message, args[0]);
   const days = Number(args[1] || 14);
@@ -2425,7 +2471,7 @@ async function handleManualTempBan(message, args) {
 }
 
 async function handleUnTempBan(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can remove tempbans.");
+  if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can remove tempbans.");
 
   const userId = message.mentions.users.first()?.id || args[0];
   if (!userId) {
@@ -2451,7 +2497,7 @@ async function handleUnTempBan(message, args) {
 }
 
 async function handleKick(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can kick users.");
+  if (!canKick(message.member)) return message.reply("Only Moderator+ with Kick Members can kick users.");
   const member = await resolveMemberArgument(message, args[0]);
   if (!member) return message.reply("Usage: `!kick @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
@@ -2462,7 +2508,7 @@ async function handleKick(message, args) {
 }
 
 async function handleBan(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can ban users.");
+  if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can ban users.");
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!ban @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
@@ -2473,7 +2519,7 @@ async function handleBan(message, args) {
 }
 
 async function handleTimeout(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can timeout users.");
+  if (!canTimeout(message.member)) return message.reply("Only staff with Timeout Members can timeout users.");
   const member = await resolveMemberArgument(message, args[0]);
   const minutes = Number(args[1] || 10);
   if (!member || Number.isNaN(minutes)) return message.reply("Usage: `!timeout @user-or-id minutes reason`");
@@ -2484,7 +2530,7 @@ async function handleTimeout(message, args) {
 }
 
 async function handleUnban(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can unban users.");
+  if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can unban users.");
   const user = await resolveUserArgument(message, args[0]);
   const userId = user?.id || args[0];
   if (!userId) return message.reply("Usage: `!unban userId reason`");
@@ -2505,7 +2551,7 @@ async function handleUnban(message, args) {
 }
 
 async function handleUntimeout(message, args) {
-  if (!isModerator(message.member)) return message.reply("Only moderators can remove timeouts.");
+  if (!canTimeout(message.member)) return message.reply("Only staff with Timeout Members can remove timeouts.");
   const member = await resolveMemberArgument(message, args[0]);
   if (!member) return message.reply("Usage: `!untimeout @user-or-id reason`");
   const reason = args.slice(1).join(" ") || "No reason provided";
@@ -2675,6 +2721,13 @@ function determinePunishment(ruleKey, count, severe) {
   }
 
   return { action: "ban" };
+}
+
+function limitPunishmentForMember(punishment, member) {
+  if (punishment.action === "ban" && !canBan(member)) return canTimeout(member) ? { action: "timeout", days: 3 } : { action: "warn" };
+  if (punishment.action === "tempban" && !canBan(member)) return canTimeout(member) ? { action: "timeout", days: Math.min(punishment.days || 3, 3) } : { action: "warn" };
+  if (punishment.action === "timeout" && !canTimeout(member)) return { action: "warn" };
+  return punishment;
 }
 
 async function fetchReferencedMessage(message) {
