@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-13-staff-permission-sync";
+const BOT_VERSION = "2026-06-13-invite-only-automod";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const XP_COOLDOWN = 60 * 1000;
@@ -218,12 +218,7 @@ const PUNISHMENT_RULES = {
   impersonation: { label: "Impersonating staff", first: { action: "tempban", days: 14 } }
 };
 const AUTOMOD_RULES = {
-  badword: { label: "Filtered word/phrase", grade: 2, delete: true },
-  massmentions: { label: "Mass mentions", grade: 2, delete: true },
-  linkspam: { label: "Link or invite spam", grade: 2, delete: true },
-  repeatspam: { label: "Repeated message spam", grade: 1, delete: true },
-  emojispam: { label: "Emoji/sticker spam", grade: 1, delete: true },
-  nsfw: { label: "NSFW content", grade: 99, action: { action: "ban" }, delete: true }
+  invite: { label: "Discord invite link", delete: true, action: { action: "warn" } }
 };
 const NSFW_PATTERN = /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|sex\s*(video|pic|image|link)|18\+)\b/i;
 const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-z0-9-]+/i;
@@ -952,8 +947,8 @@ async function handleAutoModCommand(message, args) {
         baseEmbed("AutoMod Settings")
           .addFields(
             field("Status", settings.autoModEnabled === false ? "Disabled" : "Enabled", true),
-            field("Reset Window", "Low-level automod strikes reset after 14 days", true),
-            field("Escalation", "3 basic strikes = warn threshold, then timeout/tempban/ban if it keeps going"),
+            field("Filter", "Only Discord server invite links are blocked."),
+            field("Action", "Deletes the invite message, warns the user, and logs a case."),
             field("Commands", "`!automod on`, `!automod off`, `!automod reset @user`")
           )
       ]
@@ -978,7 +973,7 @@ async function handleAutoModCommand(message, args) {
     delete data.autoMod[user.id];
     saveGuildData(message.guild.id, data);
     await logTo(message.guild, "mod-logs", "AutoMod Reset", [field("User", `${user.tag} (${user.id})`), field("Moderator", message.author.tag)]);
-    return message.reply(`AutoMod strikes reset for ${user.tag}.`);
+    return message.reply(`AutoMod records reset for ${user.tag}.`);
   }
 
   return message.reply("Usage: `!automod status`, `!automod on`, `!automod off`, `!automod reset @user`");
@@ -2924,102 +2919,53 @@ async function handleAutoMod(message, settings = {}) {
   if (!result) return;
 
   const rule = AUTOMOD_RULES[result.ruleKey];
-  const shouldDelete = rule.delete || result.delete;
-  const deleted = shouldDelete ? await message.delete().then(() => true).catch(() => false) : false;
+  const deleted = await message.delete().then(() => true).catch(() => false);
   const data = getGuildData(message.guild.id);
   data.autoMod ||= {};
-  const record = data.autoMod[message.author.id] ||= { strikes: 0, history: [], recent: [] };
+  const record = data.autoMod[message.author.id] ||= { history: [] };
   const now = Date.now();
 
-  if (!record.lastAt || now - record.lastAt > AUTOMOD_RESET_MS) record.strikes = 0;
-  record.strikes += rule.grade;
   record.lastAt = now;
   record.history = (record.history || []).filter((entry) => now - entry.at < AUTOMOD_RESET_MS);
   record.history.push({
     rule: result.ruleKey,
     label: rule.label,
-    grade: rule.grade,
     content: message.content.slice(0, 500),
     channelId: message.channel.id,
     deleted,
     at: now
   });
 
-  const punishment = rule.action || determineAutoModPunishment(record.strikes);
+  const punishment = rule.action;
   const caseId = addCase(data, {
-    type: `AutoMod ${formatPunishment(punishment)}`,
+    type: "AutoMod Invite Block",
     userId: message.author.id,
     userTag: message.author.tag,
     moderatorId: client.user.id,
     moderatorTag: client.user.tag,
     reason: `${rule.label}: ${result.reason}`,
-    details: `Grade ${rule.grade}; strikes ${record.strikes}; deleted message: ${deleted ? "yes" : "no"}`
+    details: `Deleted message: ${deleted ? "yes" : "no"}`
   });
-  if (punishment.action === "warn") {
-    data.warnings[message.author.id] ||= [];
-    data.warnings[message.author.id].push({
-      caseId,
-      reason: `AutoMod: ${rule.label} (${result.reason})`,
-      moderatorId: client.user.id,
-      at: now
-    });
-  }
+  data.warnings[message.author.id] ||= [];
+  data.warnings[message.author.id].push({
+    caseId,
+    reason: `AutoMod: ${rule.label} (${result.reason})`,
+    moderatorId: client.user.id,
+    at: now
+  });
 
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
 
-  const actionError = await applyPunishmentAction(message.guild, message.author, message.member, punishment, `AutoMod: ${rule.label}. ${result.reason}`, client.user)
-    .then(() => null)
-    .catch((error) => error);
-  await logAutoModAction(message, rule, result, punishment, deleted, record.strikes, caseId);
-
-  if (actionError) {
-    await logTo(message.guild, "mod-logs", "AutoMod Action Failed", [
-      field("User", `${message.author.tag} (${message.author.id})`),
-      field("Action", formatPunishment(punishment), true),
-      field("Reason", actionError.message)
-    ]);
-  }
+  await message.author.send(`Your message in ${message.guild.name} was removed because Discord server invite links are not allowed.`).catch(() => {});
+  await logAutoModAction(message, rule, result, punishment, deleted, caseId);
 }
 
-function detectAutoModInfraction(message, settings = {}) {
+function detectAutoModInfraction(message) {
   const content = message.content || "";
-  const urls = (content.match(URL_PATTERN) || []).filter((url) => !MEDIA_URL_PATTERN.test(url));
-  const mentionCount = message.mentions.users.size + message.mentions.roles.size + (message.mentions.everyone ? 3 : 0);
-  const recent = getRecentAuthorMessages(message);
-  const badWord = findBadWordMatch(content, settings.badWords);
-
-  if (badWord) {
-    return { ruleKey: "badword", reason: `Matched filtered word or phrase: ${badWord}`, delete: true };
-  }
-
-  if (NSFW_PATTERN.test(content) || message.attachments.some((attachment) => NSFW_PATTERN.test(`${attachment.name || ""} ${attachment.url || ""}`))) {
-    return { ruleKey: "nsfw", reason: "Explicit NSFW keyword or attachment name detected.", delete: true };
-  }
-
-  if (message.mentions.everyone || mentionCount >= 5 || recent.reduce((total, entry) => total + (entry.mentions || 0), mentionCount) >= 8) {
-    return { ruleKey: "massmentions", reason: `${mentionCount} mention(s) in one message or too many mentions in a short window.`, delete: true };
-  }
-
-  if (DISCORD_INVITE_PATTERN.test(content) || urls.length >= 5 || recent.reduce((total, entry) => total + (entry.urls || 0), urls.length) >= 8) {
-    return { ruleKey: "linkspam", reason: "Discord invite, advertising link, or too many links in a short window.", delete: true };
-  }
-
-  const repeated = recent.filter((entry) => entry.normalized && entry.normalized === normalizeSpamText(content)).length;
-  if (content.length >= 4 && repeated >= 4) {
-    return { ruleKey: "repeatspam", reason: "Repeated the same message too many times.", delete: true };
-  }
-
-  if (recent.length >= 9) {
-    return { ruleKey: "repeatspam", reason: "Too many messages in a short time.", delete: true };
-  }
-
-  const emojiCount = (content.match(/<a?:\w+:\d+>|[\u{1F300}-\u{1FAFF}]/gu) || []).length;
-  if (emojiCount >= 10 || message.stickers.size >= 2) {
-    return { ruleKey: "emojispam", reason: "Too many emojis or stickers.", delete: true };
-  }
-
-  return null;
+  return DISCORD_INVITE_PATTERN.test(content)
+    ? { ruleKey: "invite", reason: "Discord server invite link detected." }
+    : null;
 }
 
 function getRecentAuthorMessages(message) {
@@ -3064,13 +3010,11 @@ function determineAutoModPunishment(strikes) {
   return { action: "ban" };
 }
 
-async function logAutoModAction(message, rule, result, punishment, deleted, strikes, caseId) {
+async function logAutoModAction(message, rule, result, punishment, deleted, caseId) {
   await logTo(message.guild, "mod-logs", "AutoMod Action", [
     field("User", `${message.author.tag} (${message.author.id})`),
     field("Channel", `${message.channel}`),
     field("Infraction", rule.label, true),
-    field("Grade", rule.grade, true),
-    field("Current Strikes", strikes, true),
     field("Action", formatPunishment(punishment), true),
     field("Case", `#${caseId}`, true),
     field("Message Deleted", deleted ? "Yes" : "No", true),
