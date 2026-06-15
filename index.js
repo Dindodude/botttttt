@@ -217,6 +217,31 @@ const PUNISHMENT_RULES = {
   moddiscussion: { label: "Discussing moderation outside tickets", first: { action: "remind" } },
   impersonation: { label: "Impersonating staff", first: { action: "tempban", days: 14 } }
 };
+const STAFF_LOG_MAX_POINTS = 20;
+const STAFF_LOG_RULES = [
+  { key: "rude", section: "Verbal Warning", label: "Being rude to another person/staff", points: 0.5, action: { action: "warn" }, aliases: ["rude", "disrespect", "being rude"] },
+  { key: "weird-message", section: "Verbal Warning", label: "Weird/inappropriate message", points: 1, action: { action: "warn" }, aliases: ["weird", "inappropriate", "gooner", "smash"] },
+  { key: "spamming", section: "Verbal Warning", label: "Spamming", points: 0.5, action: { action: "warn" }, aliases: ["spam", "spamming"] },
+  { key: "false-ticket", section: "Verbal Warning", label: "False ticket or fake report", points: 1.5, action: { action: "warn" }, aliases: ["false ticket", "fake ticket", "fake report"] },
+  { key: "wrong-language", section: "Verbal Warning", label: "Speaking in the wrong language channel", points: 0.5, action: { action: "warn" }, aliases: ["wrong language", "language channel"] },
+  { key: "light-nsfw", section: "Verbal Warning", label: "Light NSFW/suggestive content", points: 2, action: { action: "warn" }, aliases: ["light nsfw", "suggestive"] },
+  { key: "fake-event", section: "Verbal Warning", label: "Fake event/giveaway", points: 1.5, action: { action: "warn" }, aliases: ["fake event", "fake giveaway", "giveaway"] },
+  { key: "ping-everyone", section: "Timeout", label: "Pinged everyone/here", points: 1, action: { action: "timeout", minutes: 30 }, aliases: ["ping everyone", "ping here", "everyone"] },
+  { key: "advertisement", section: "Timeout", label: "Advertisement", points: 1.5, action: { action: "timeout", hours: 2 }, aliases: ["advertise", "advertisement", "advertising", "ad"] },
+  { key: "dev-info", section: "Timeout", label: "Asking developers for update information", points: 1.5, action: { action: "timeout", hours: 4 }, aliases: ["dev info", "update info", "asking devs", "requirements"] },
+  { key: "bypassing-slurs", section: "Timeout", label: "Bypassing slurs", points: 3, action: { action: "timeout", hours: 5 }, aliases: ["bypass slur", "bypassing slurs", "hitler", "nword", "n-word"] },
+  { key: "mild-nsfw", section: "Timeout", label: "Mild NSFW/gore/sexual content", points: 3, action: { action: "timeout", hours: 4 }, aliases: ["mild nsfw", "gore", "sexual content"] },
+  { key: "ping-staff", section: "Timeout", label: "Pinging staff roles", points: 5, action: { action: "timeout", hours: 6 }, aliases: ["ping staff", "staff role", "founder", "manager", "admin role"] },
+  { key: "ping-limited", section: "Timeout", label: "Pinging limited roles", points: 4, action: { action: "timeout", hours: 5 }, aliases: ["ping limited", "limited roles", "swan", "duck", "geese"] },
+  { key: "ping-youtuber", section: "Timeout", label: "Pinging YouTubers", points: 3, action: { action: "timeout", hours: 4 }, aliases: ["ping youtuber", "youtuber", "creator ping"] },
+  { key: "politics", section: "Timeout", label: "Politics", points: 6, action: { action: "timeout", days: 7 }, aliases: ["politics"] },
+  { key: "hard-nsfw", section: "Ban", label: "Hard NSFW, hard gore, scary/bloody content", points: 10, action: { action: "ban" }, aliases: ["hard nsfw", "hard gore", "blood", "nudity"] },
+  { key: "politics-v2", section: "Ban", label: "Extreme politics or hateful event discussion", points: 15, action: { action: "ban" }, aliases: ["politics v2", "9/11", "jew related", "bad events"] },
+  { key: "scam-links", section: "Ban", label: "Scam/phishing links", points: 20, action: { action: "ban" }, aliases: ["scam", "phishing", "scam links", "free nitro"] },
+  { key: "slurs", section: "Ban", label: "Slurs toward gender/race/etc.", points: 20, action: { action: "ban" }, aliases: ["slur", "slurs", "n word", "n-word", "faggot"] },
+  { key: "suicidal-joking", section: "Timeout", label: "Suicidal comment, joking/context unclear", points: 6, action: { action: "timeout", days: 7 }, aliases: ["kys joke", "suicidal joke", "kill yourself joke"] },
+  { key: "suicidal-serious", section: "Ban", label: "Serious suicidal comment toward someone", points: 20, action: { action: "ban" }, aliases: ["kys", "kill yourself", "suicidal serious"] }
+];
 const AUTOMOD_RULES = {
   invite: { label: "Discord invite link", delete: true, action: { action: "warn" } },
   blockedterm: { label: "Blocked slur/NSFW term", delete: true, action: { action: "warn" } }
@@ -234,7 +259,7 @@ const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
 const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
-const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
   "What is your age?",
@@ -336,6 +361,7 @@ client.on("messageCreate", async (message) => {
     if (command === "unwarn") return handleUnwarn(message, args);
     if (command === "warnings") return handleWarnings(message);
     if (command === "punish") return handlePunish(message, args);
+    if (command === "log") return handleStaffLog(message);
     if (command === "cases" || command === "case" || command === "punishments") return handleCases(message);
     if (command === "removecase") return handleRemoveCase(message, args);
     if (command === "tempban") return handleManualTempBan(message, args);
@@ -436,6 +462,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("rr:")) return handleReactionRoleButton(interaction);
     if (interaction.customId.startsWith("staffapp:start:")) return handleStaffAppStart(interaction);
     if (interaction.customId.startsWith("staffappreview:")) return handleStaffAppReview(interaction);
+    if (interaction.customId.startsWith("stafflogvote:")) return handleStaffLogVote(interaction);
     if (interaction.customId.startsWith("guide:")) return handleGuideButton(interaction);
   } catch (error) {
     console.error(error);
@@ -514,7 +541,7 @@ function canUseStaffCommand(member, command) {
   if (!isStaff(member)) return false;
 
   if (["staffcommands", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warnings", "cases", "case", "punishments"].includes(command)) return true;
-  if (["warn", "punish"].includes(command)) return canWarn(member);
+  if (["warn", "punish", "log"].includes(command)) return canWarn(member);
   if (["timeout", "untimeout"].includes(command)) return canTimeout(member);
   if (["unwarn", "removecase"].includes(command)) return canManageWarnings(member);
   if (["purge", "clear"].includes(command)) return canPurge(member);
@@ -1587,7 +1614,7 @@ async function handleStaffCommands(message) {
           field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
-          field("Trial Mod", "`!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
+          field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
           field("Events/Stats", "`!event`, `!endevent`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
@@ -1876,6 +1903,35 @@ async function handleStaffAppReview(interaction) {
   });
 }
 
+async function handleStaffLogVote(interaction) {
+  if (!isAdmin(interaction.member)) {
+    await interaction.reply({ content: "Only admins can approve, deny, or star staff logs.", ephemeral: true });
+    return;
+  }
+
+  const [, vote, rawCaseId] = interaction.customId.split(":");
+  const caseId = Number(rawCaseId);
+  if (!caseId || Number.isNaN(caseId)) {
+    await interaction.reply({ content: "That staff log button is missing its case ID.", ephemeral: true });
+    return;
+  }
+
+  const data = getGuildData(interaction.guild.id);
+  data.staffLogVotes ||= {};
+  const record = data.staffLogVotes[caseId] ||= { up: [], down: [], star: [] };
+
+  for (const key of ["up", "down", "star"]) {
+    record[key] = record[key].filter((userId) => userId !== interaction.user.id);
+  }
+  if (record[vote]) record[vote].push(interaction.user.id);
+
+  saveGuildData(interaction.guild.id, data);
+  await interaction.reply({
+    content: `Recorded ${vote === "up" ? "approval" : vote === "down" ? "denial" : "star"} for staff log case #${caseId}.`,
+    ephemeral: true
+  });
+}
+
 function buildStaffApplicationEmbed(user, answers, status) {
   const color = status === "Approved" ? "#22c55e" : status === "Declined" ? "#ef4444" : status === "Interview" ? "#f59e0b" : COLOR;
   return baseEmbed(`Staff Application - ${status}`, color)
@@ -2055,6 +2111,7 @@ async function handleStaffStats(message) {
           field("Claimed Tickets", stats.claimedTickets || 0, true),
           field("Closed Tickets", stats.closedTickets || 0, true),
           field("Deleted Tickets", stats.deletedTickets || 0, true),
+          field("Staff Logs", stats.logs || 0, true),
           field("Punishments", stats.punishments || 0, true)
         )
     ]
@@ -2158,6 +2215,21 @@ async function ensureTranscriptLogChannel(guild) {
     permissionOverwrites: staffOverwrites(guild),
     reason: "Ticket transcript logs"
   }).catch(() => null);
+}
+
+async function ensureStaffLogsChannel(guild) {
+  const existing = findChannel(guild, "staff-logs");
+  if (existing) return existing;
+
+  const staffCategory = guild.channels.cache.find((channel) => channel.type === ChannelType.GuildCategory && stripStyle(channel.name).includes("staff"));
+  const created = await guild.channels.create({
+    name: "staff-logs",
+    type: ChannelType.GuildText,
+    parent: staffCategory?.id || null,
+    permissionOverwrites: staffOverwrites(guild),
+    reason: "Staff guideline logs"
+  }).catch(() => null);
+  return created || findChannel(guild, "logs") || findChannel(guild, "mod-logs");
 }
 
 async function handleBugReport(message) {
@@ -2427,6 +2499,127 @@ async function handlePunish(message, args) {
   await applyPunishmentAction(message.guild, user, member, punishment, reason, message.author);
   await logPunishment(message.guild, user, message.author, ruleKey, punishment, reason, evidence, deleted, nextCount, caseId);
   await message.reply(`Punishment applied to **${user.tag}**: **${formatPunishment(punishment)}** for **${PUNISHMENT_RULES[ruleKey].label}**. Case #${caseId}.`);
+}
+
+async function handleStaffLog(message) {
+  if (!canWarn(message.member)) return message.reply("Only staff with moderation permissions can use `!log`.");
+
+  await message.channel.send("Staff log started. Send the user's mention or user ID.");
+  const userReply = await collectOneMessage(message.channel, message.author.id);
+  if (!userReply) return message.channel.send("Timed out. Please run `!log` again.");
+
+  const user = await resolveUserArgument(userReply, userReply.content);
+  if (!user) return message.channel.send("I could not find that user. Run `!log` again and send a valid mention or user ID.");
+
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  if (member && isStaff(member)) return message.channel.send("I will not auto-punish staff members with this command.");
+
+  await message.channel.send({
+    embeds: [
+      baseEmbed("Choose Guideline Rule")
+        .setDescription("Reply with a rule key or a close name, like `spamming`, `verbal warning spamming`, `advertisement`, `slurs`, or `hard nsfw`.")
+        .addFields(...buildStaffLogRuleFields())
+    ]
+  });
+  const ruleReply = await collectOneMessage(message.channel, message.author.id);
+  if (!ruleReply) return message.channel.send("Timed out. Please run `!log` again.");
+
+  const rule = findStaffLogRule(ruleReply.content);
+  if (!rule) return message.channel.send("I could not match that to a staff guideline rule. Run `!log` again and use one of the rule keys shown.");
+
+  await message.channel.send("Send proof now. A screenshot attachment, message link, or clear text proof is okay.");
+  const proofReply = await collectOneMessage(message.channel, message.author.id, 5 * 60 * 1000);
+  if (!proofReply) return message.channel.send("Timed out waiting for proof. Please run `!log` again.");
+
+  await message.channel.send("Any extra notes? Type `none` if there are no notes.");
+  const notesReply = await collectOneMessage(message.channel, message.author.id);
+  if (!notesReply) return message.channel.send("Timed out. Please run `!log` again.");
+
+  const proof = getMessageProof(proofReply);
+  const notes = /^none$/i.test(notesReply.content.trim()) ? "None" : notesReply.content.trim();
+  const referencedMessage = await fetchReferencedMessage(message);
+  const deleted = referencedMessage ? await referencedMessage.delete().then(() => true).catch(() => false) : false;
+  const data = getGuildData(message.guild.id);
+  data.staffLogPoints ||= {};
+  data.warnings ||= {};
+  data.analytics ||= { punishments: 0, joins: 0, leaves: 0, messages: 0, tickets: 0, suggestions: 0, reviews: 0, channelMessages: {}, activeUsers: {} };
+  data.analytics.punishments = (data.analytics.punishments || 0) + 1;
+
+  const pointRecord = data.staffLogPoints[user.id] ||= { points: 0, history: [] };
+  const beforePoints = Number(pointRecord.points || 0);
+  const recommended = determineStaffLogPunishment(rule, beforePoints);
+  let applied = limitPunishmentForMember(recommended, message.member);
+  if (!member && applied.action === "timeout") applied = { action: "warn" };
+  const totalPoints = recommended.action === "ban" ? STAFF_LOG_MAX_POINTS : Math.min(STAFF_LOG_MAX_POINTS, beforePoints + rule.points);
+  const needsAdmin = formatPunishment(applied) !== formatPunishment(recommended);
+  const reason = `${rule.section}: ${rule.label}`;
+
+  pointRecord.points = totalPoints;
+  pointRecord.history.push({
+    ruleKey: rule.key,
+    points: rule.points,
+    totalPoints,
+    recommended: formatPunishment(recommended),
+    applied: formatPunishment(applied),
+    moderatorId: message.author.id,
+    proof,
+    notes,
+    at: Date.now()
+  });
+
+  const caseId = addCase(data, {
+    type: "Staff Log",
+    userId: user.id,
+    userTag: user.tag,
+    moderatorId: message.author.id,
+    moderatorTag: message.author.tag,
+    reason,
+    details: `Rule ${rule.key}; points ${rule.points}; total ${totalPoints}/${STAFF_LOG_MAX_POINTS}; recommended ${formatPunishment(recommended)}; applied ${formatPunishment(applied)}`
+  });
+
+  if (applied.action === "warn") {
+    data.warnings[user.id] ||= [];
+    data.warnings[user.id].push({ caseId, reason, moderatorId: message.author.id, at: Date.now() });
+  }
+
+  const staff = data.staffStats?.[message.author.id] || { claimedTickets: 0, closedTickets: 0, deletedTickets: 0, punishments: 0, logs: 0 };
+  data.staffStats ||= {};
+  staff.logs = (staff.logs || 0) + 1;
+  staff.punishments = (staff.punishments || 0) + 1;
+  data.staffStats[message.author.id] = staff;
+  saveGuildData(message.guild.id, data);
+
+  const actionError = await applyPunishmentAction(message.guild, user, member, applied, `${reason} | Case #${caseId}`, message.author)
+    .then(() => null)
+    .catch((error) => error);
+
+  const logChannel = await ensureStaffLogsChannel(message.guild);
+  const embed = baseEmbed(`Staff Log Case #${caseId}`, needsAdmin ? ERROR_COLOR : COLOR)
+    .setDescription(actionError ? "Guideline log created, but Discord blocked the action. Check bot permissions/role hierarchy." : needsAdmin ? "Recommended action is above this staff member's permissions. Admin review is needed." : "Guideline log created and action applied.")
+    .addFields(
+      field("Rule Broken", `${rule.section} - ${rule.label}`),
+      field("User", `${user.tag} (${user.id})`),
+      field("User Points", `${totalPoints}/${STAFF_LOG_MAX_POINTS}`, true),
+      field("Points Added", rule.points, true),
+      field("Staff Punishment", formatPunishment(applied), true),
+      field("Recommended", formatPunishment(recommended), true),
+      field("Staff", `${message.author.tag} (${message.author.id})`),
+      field("Additional Action", needsAdmin ? "Yes - admin review needed" : "No", true),
+      field("Broken Message Deleted", deleted ? "Yes" : "No", true),
+      field("Proof", proof.slice(0, 1000)),
+      field("Notes", notes.slice(0, 1000)),
+      ...(actionError ? [field("Action Error", actionError.message.slice(0, 1000))] : [])
+    )
+    .setFooter({ text: "Admins can use the buttons to approve, deny, or star the log." });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`stafflogvote:down:${caseId}`).setEmoji("👎").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`stafflogvote:up:${caseId}`).setEmoji("👍").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`stafflogvote:star:${caseId}`).setEmoji("⭐").setStyle(ButtonStyle.Secondary)
+  );
+
+  if (logChannel) await logChannel.send({ embeds: [embed], components: [row] }).catch(() => {});
+  await message.reply(`Staff log created for **${user.tag}**. Case #${caseId}. Applied: **${formatPunishment(applied)}**.`);
 }
 
 async function handleCases(message) {
@@ -2801,6 +2994,46 @@ function limitPunishmentForMember(punishment, member) {
   return punishment;
 }
 
+function determineStaffLogPunishment(rule, currentPoints) {
+  const total = currentPoints + rule.points;
+  if (rule.action.action === "ban" || total >= STAFF_LOG_MAX_POINTS) return { action: "ban" };
+  return rule.action;
+}
+
+function findStaffLogRule(input = "") {
+  const cleaned = normalizeRuleText(input);
+  return STAFF_LOG_RULES.find((rule) => {
+    if (normalizeRuleText(rule.key) === cleaned) return true;
+    if (normalizeRuleText(rule.label) === cleaned) return true;
+    return rule.aliases.some((alias) => cleaned.includes(normalizeRuleText(alias)) || normalizeRuleText(alias).includes(cleaned));
+  }) || null;
+}
+
+function normalizeRuleText(value = "") {
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function buildStaffLogRuleFields() {
+  const grouped = STAFF_LOG_RULES.reduce((acc, rule) => {
+    acc[rule.section] ||= [];
+    acc[rule.section].push(`\`${rule.key}\` - ${rule.label} (${rule.points} pts, ${formatPunishment(rule.action)})`);
+    return acc;
+  }, {});
+
+  return Object.entries(grouped).map(([section, rules]) => field(section, rules.join("\n").slice(0, 1024)));
+}
+
+function getMessageProof(message) {
+  const attachments = message.attachments.map((attachment) => attachment.url);
+  return [message.content.trim(), ...attachments].filter(Boolean).join("\n") || "No proof provided";
+}
+
+function punishmentDurationMs(punishment) {
+  if (punishment.minutes) return punishment.minutes * 60 * 1000;
+  if (punishment.hours) return punishment.hours * 60 * 60 * 1000;
+  return Math.min((punishment.days || 1) * DAY_MS, 28 * DAY_MS);
+}
+
 async function fetchReferencedMessage(message) {
   if (!message.reference?.messageId) return null;
   return message.channel.messages.fetch(message.reference.messageId).catch(() => null);
@@ -2819,8 +3052,8 @@ async function applyPunishmentAction(guild, user, member, punishment, reason, mo
 
   if (punishment.action === "timeout") {
     if (!member) return;
-    const duration = Math.min((punishment.days || 1) * DAY_MS, 28 * DAY_MS);
-    await user.send(`You were muted in ${guild.name} for ${punishment.days || 1} day(s): ${reason}`).catch(() => {});
+    const duration = punishmentDurationMs(punishment);
+    await user.send(`You were muted in ${guild.name} for ${formatPunishment(punishment)}: ${reason}`).catch(() => {});
     await member.timeout(duration, `${reason} - ${moderator.tag}`);
     return;
   }
@@ -2898,6 +3131,8 @@ async function logPunishment(guild, user, moderator, ruleKey, punishment, reason
 }
 
 function formatPunishment(punishment) {
+  if (punishment.action === "timeout" && punishment.minutes) return `Timeout ${punishment.minutes}m`;
+  if (punishment.action === "timeout" && punishment.hours) return `Timeout ${punishment.hours}h`;
   if (punishment.action === "timeout") return `Timeout ${punishment.days || 1}d`;
   if (punishment.action === "tempban") return `Tempban ${punishment.days || 14}d`;
   if (punishment.action === "ban") return "Permanent ban";
