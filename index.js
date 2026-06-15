@@ -258,7 +258,7 @@ const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.co
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
 const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
@@ -335,6 +335,7 @@ client.on("messageCreate", async (message) => {
     if (command === "automod") return handleAutoModCommand(message, args);
     if (command === "badword") return handleBadWordCommand(message, args);
     if (command === "commandconfigure") return handleCommandConfigure(message, args);
+    if (command === "logconfigure") return handleLogConfigure(message, args);
     if (command === "reactionroles") return handleReactionRoles(message);
     if ((command === "start" && args[0]?.toLowerCase() === "here") || command === "starthere") return handleStartHereCommand(message);
     if (command === "rules") return handleRules(message);
@@ -1086,6 +1087,51 @@ async function handleCommandConfigure(message, args) {
   await message.reply(`Regular player commands will now only work in ${channel}. Mod+ and staff permission commands can still be used in chat based on role permissions.`);
 }
 
+async function handleLogConfigure(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!logconfigure`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const current = settings.staffLogsChannelId ? message.guild.channels.cache.get(settings.staffLogsChannelId) : findChannel(message.guild, "staff-logs");
+  const action = (args[0] || "status").toLowerCase();
+
+  if (["status", "show", "view"].includes(action)) {
+    return message.reply({
+      embeds: [
+        baseEmbed("Staff Log Configuration")
+          .addFields(
+            field("Log Channel", current ? `${current}` : "Not set. The bot will create/use #staff-logs."),
+            field("Set Channel", "`!logconfigure #staff-logs`"),
+            field("Reset", "`!logconfigure reset`")
+          )
+      ]
+    });
+  }
+
+  if (["reset", "default", "clear"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, staffLogsChannelId: null });
+    return message.reply("Staff log channel reset. `!log` will create/use `#staff-logs`.");
+  }
+
+  const channel = message.mentions.channels.first()
+    || message.guild.channels.cache.get(cleanChannelId(args[0]))
+    || findChannel(message.guild, args.join(" ").replace(/^#/, ""));
+
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    return message.reply("Usage: `!logconfigure #staff-logs`, `!logconfigure status`, or `!logconfigure reset`.");
+  }
+
+  await channel.permissionOverwrites.edit(message.guild.members.me.id, {
+    ViewChannel: true,
+    SendMessages: true,
+    EmbedLinks: true,
+    AttachFiles: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  saveGuildSettings(message.guild.id, { ...settings, staffLogsChannelId: channel.id });
+  return message.reply(`Staff logs from \`!log\` will now be sent to ${channel}.`);
+}
+
 async function handleStartHereCommand(message) {
   if (!isAdmin(message.member)) return message.reply("Only admins can use `!start here`.");
 
@@ -1611,7 +1657,7 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
+          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
@@ -2218,6 +2264,10 @@ async function ensureTranscriptLogChannel(guild) {
 }
 
 async function ensureStaffLogsChannel(guild) {
+  const settings = getGuildSettings(guild.id) || {};
+  const configured = settings.staffLogsChannelId ? guild.channels.cache.get(settings.staffLogsChannelId) : null;
+  if (configured?.type === ChannelType.GuildText) return configured;
+
   const existing = findChannel(guild, "staff-logs");
   if (existing) return existing;
 
