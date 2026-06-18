@@ -202,6 +202,7 @@ const TICKET_TYPES = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTOMOD_RESET_MS = 14 * DAY_MS;
 const AUTOMOD_SPAM_WINDOW_MS = 20 * 1000;
+const GIVEAWAY_CHECK_MS = 60 * 1000;
 const PUNISHMENT_RULES = {
   drama: { label: "Starting/provoking drama", first: { action: "warn" } },
   harassment: { label: "Harassment", first: { action: "warn" }, repeatTimeoutDays: 3 },
@@ -259,7 +260,7 @@ const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
 const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
-const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
   "What is your age?",
@@ -293,7 +294,9 @@ client.once("ready", () => {
   console.log(`Data directory: ${DATA_DIR}`);
   rotateStatus();
   checkExpiredTempBans();
+  checkGiveaways();
   setInterval(checkExpiredTempBans, 10 * 60 * 1000).unref();
+  setInterval(checkGiveaways, GIVEAWAY_CHECK_MS).unref();
 });
 
 client.on("messageCreate", async (message) => {
@@ -347,6 +350,7 @@ client.on("messageCreate", async (message) => {
     if (command === "bugreport") return handleBugReport(message);
     if (command === "event") return handleEvent(message);
     if (command === "endevent") return handleEndEvent(message);
+    if (command === "gcreate") return handleGiveawayCreate(message);
     if (command === "rank" || command === "level") return handleRank(message);
     if (command === "leaderboard") return handleLeaderboard(message);
     if (command === "analytics") return handleAnalytics(message);
@@ -464,6 +468,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("staffapp:start:")) return handleStaffAppStart(interaction);
     if (interaction.customId.startsWith("staffappreview:")) return handleStaffAppReview(interaction);
     if (interaction.customId.startsWith("stafflogvote:")) return handleStaffLogVote(interaction);
+    if (interaction.customId.startsWith("giveaway:enter:")) return handleGiveawayEnter(interaction);
     if (interaction.customId.startsWith("guide:")) return handleGuideButton(interaction);
   } catch (error) {
     console.error(error);
@@ -548,7 +553,7 @@ function canUseStaffCommand(member, command) {
   if (["purge", "clear"].includes(command)) return canPurge(member);
   if (["kick"].includes(command)) return canKick(member);
   if (["ban", "unban", "tempban", "untempban"].includes(command)) return canBan(member);
-  if (["event", "endevent", "givepoint"].includes(command)) return isModerator(member);
+  if (["event", "endevent", "gcreate", "givepoint"].includes(command)) return isModerator(member);
 
   return isModerator(member);
 }
@@ -1662,7 +1667,7 @@ async function handleStaffCommands(message) {
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
-          field("Events/Stats", "`!event`, `!endevent`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
+          field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
     ]
   });
@@ -2339,6 +2344,178 @@ async function handleEndEvent(message) {
   active[1].ended = true;
   saveGuildData(message.guild.id, data);
   await message.reply(`Ended event: **${active[1].title}**`);
+}
+
+async function handleGiveawayCreate(message) {
+  if (!isModerator(message.member)) return message.reply("Only Moderator+ can create giveaways.");
+
+  const prize = await ask(message, "What is the giveaway prize? Example: `500 Robux`, `Gamepass`, `Nitro`, etc.");
+  if (!prize) return;
+
+  const durationReply = await ask(message, "How long should it last? Example: `30m`, `2h`, `3d`, or `1 day`.", (reply) => Boolean(parseGiveawayDuration(reply.content)));
+  if (!durationReply) return;
+  const duration = parseGiveawayDuration(durationReply.content);
+
+  const winnersReply = await ask(message, "How many winners? Type a number like `1`, `2`, or `3`.", (reply) => {
+    const count = Number(reply.content.trim());
+    return Number.isInteger(count) && count >= 1 && count <= 25;
+  });
+  if (!winnersReply) return;
+  const winnersCount = Number(winnersReply.content.trim());
+
+  const channelReply = await ask(message, "Where should I post it? Mention a channel or type `here`.");
+  if (!channelReply) return;
+  const channel = /^here$/i.test(channelReply.content.trim())
+    ? message.channel
+    : channelReply.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(channelReply.content));
+  if (!channel || channel.type !== ChannelType.GuildText) return message.reply("That was not a valid text channel. Run `!gcreate` again.");
+
+  const giveawayId = Date.now().toString(36);
+  const giveaway = {
+    id: giveawayId,
+    guildId: message.guild.id,
+    channelId: channel.id,
+    messageId: null,
+    hostId: message.author.id,
+    prize: prize.content.trim(),
+    winnersCount,
+    entries: [],
+    endsAt: Date.now() + duration.ms,
+    ended: false,
+    createdAt: Date.now()
+  };
+
+  const sent = await channel.send({
+    embeds: [buildGiveawayEmbed(giveaway)],
+    components: [buildGiveawayRow(giveaway)]
+  }).catch(() => null);
+
+  if (!sent) return message.reply("I could not post the giveaway in that channel. Check my permissions.");
+
+  giveaway.messageId = sent.id;
+  const data = getGuildData(message.guild.id);
+  data.giveaways ||= {};
+  data.giveaways[giveawayId] = giveaway;
+  saveGuildData(message.guild.id, data);
+
+  await message.reply(`Giveaway created in ${channel}: **${giveaway.prize}** ending <t:${Math.floor(giveaway.endsAt / 1000)}:R>.`);
+}
+
+async function handleGiveawayEnter(interaction) {
+  const giveawayId = interaction.customId.split(":")[2];
+  const data = getGuildData(interaction.guild.id);
+  const giveaway = data.giveaways?.[giveawayId];
+
+  if (!giveaway) return interaction.reply({ content: "That giveaway was not found.", ephemeral: true });
+  if (giveaway.ended || Date.now() >= giveaway.endsAt) return interaction.reply({ content: "That giveaway already ended.", ephemeral: true });
+
+  giveaway.entries ||= [];
+  if (giveaway.entries.includes(interaction.user.id)) {
+    return interaction.reply({ content: "You are already entered in this giveaway.", ephemeral: true });
+  }
+
+  giveaway.entries.push(interaction.user.id);
+  saveGuildData(interaction.guild.id, data);
+
+  await interaction.update({
+    embeds: [buildGiveawayEmbed(giveaway)],
+    components: [buildGiveawayRow(giveaway)]
+  }).catch(async () => {
+    await interaction.reply({ content: "You entered the giveaway.", ephemeral: true }).catch(() => {});
+  });
+}
+
+function buildGiveawayEmbed(giveaway, winners = []) {
+  const ended = giveaway.ended;
+  const title = ended ? "Giveaway Ended" : "Giveaway";
+  const embed = baseEmbed(title, ended ? "#64748b" : "#f59e0b")
+    .setDescription(`Prize: **${giveaway.prize}**`)
+    .addFields(
+      field("Winners", giveaway.winnersCount, true),
+      field("Entries", giveaway.entries?.length || 0, true),
+      field("Hosted By", `<@${giveaway.hostId}>`, true),
+      field(ended ? "Ended" : "Ends", `<t:${Math.floor(giveaway.endsAt / 1000)}:${ended ? "F" : "R"}>`)
+    )
+    .setFooter({ text: ended ? "Giveaway closed" : "Click Enter Giveaway to join" });
+
+  if (ended) {
+    embed.addFields(field("Winner(s)", winners.length ? winners.map((id) => `<@${id}>`).join(", ") : "No valid entries"));
+  }
+
+  return embed;
+}
+
+function buildGiveawayRow(giveaway) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`giveaway:enter:${giveaway.id}`)
+      .setLabel(giveaway.ended ? "Giveaway Ended" : "Enter Giveaway")
+      .setStyle(giveaway.ended ? ButtonStyle.Secondary : ButtonStyle.Success)
+      .setDisabled(Boolean(giveaway.ended))
+  );
+}
+
+async function checkGiveaways() {
+  for (const guild of client.guilds.cache.values()) {
+    const data = getGuildData(guild.id);
+    data.giveaways ||= {};
+    let changed = false;
+
+    for (const giveaway of Object.values(data.giveaways)) {
+      if (giveaway.ended || Date.now() < giveaway.endsAt) continue;
+      await endGiveaway(guild, giveaway).catch((error) => console.error("Giveaway end error:", error));
+      changed = true;
+    }
+
+    if (changed) saveGuildData(guild.id, data);
+  }
+}
+
+async function endGiveaway(guild, giveaway) {
+  const data = getGuildData(guild.id);
+  const fresh = data.giveaways?.[giveaway.id] || giveaway;
+  if (fresh.ended) return;
+
+  const entries = [...new Set(fresh.entries || [])];
+  const winners = pickRandom(entries, Math.min(fresh.winnersCount || 1, entries.length));
+  fresh.ended = true;
+  fresh.winnerIds = winners;
+  fresh.endedAt = Date.now();
+  data.giveaways[fresh.id] = fresh;
+  saveGuildData(guild.id, data);
+
+  const channel = guild.channels.cache.get(fresh.channelId) || await guild.channels.fetch(fresh.channelId).catch(() => null);
+  const message = channel ? await channel.messages.fetch(fresh.messageId).catch(() => null) : null;
+
+  if (message) {
+    await message.edit({
+      embeds: [buildGiveawayEmbed(fresh, winners)],
+      components: [buildGiveawayRow(fresh)]
+    }).catch(() => {});
+  }
+
+  if (channel) {
+    await channel.send(winners.length
+      ? `Giveaway ended for **${fresh.prize}**. Winner(s): ${winners.map((id) => `<@${id}>`).join(", ")}`
+      : `Giveaway ended for **${fresh.prize}**, but there were no valid entries.`
+    ).catch(() => {});
+  }
+}
+
+function pickRandom(items, count) {
+  const copy = [...items];
+  const winners = [];
+
+  while (copy.length && winners.length < count) {
+    const index = Math.floor(Math.random() * copy.length);
+    winners.push(copy.splice(index, 1)[0]);
+  }
+
+  return winners;
+}
+
+function parseGiveawayDuration(input = "") {
+  return parseTimeoutDuration(String(input).trim().split(/\s+/), 365 * DAY_MS);
 }
 
 async function handleXp(message) {
@@ -3087,7 +3264,7 @@ function punishmentDurationMs(punishment) {
   return Math.min((punishment.days || 1) * DAY_MS, 28 * DAY_MS);
 }
 
-function parseTimeoutDuration(args = []) {
+function parseTimeoutDuration(args = [], maxMs = 28 * DAY_MS) {
   const first = String(args[0] || "").trim().toLowerCase();
   if (!first) return null;
 
@@ -3115,7 +3292,6 @@ function parseTimeoutDuration(args = []) {
       ? amount * 60 * 60 * 1000
       : amount * 60 * 1000;
 
-  const maxMs = 28 * DAY_MS;
   if (ms > maxMs) return null;
 
   const labelAmount = Number.isInteger(amount) ? amount : Number(amount.toFixed(2));
