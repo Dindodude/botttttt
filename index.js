@@ -1660,7 +1660,7 @@ async function handleStaffCommands(message) {
           field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
-          field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id minutes reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
+          field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
           field("Events/Stats", "`!event`, `!endevent`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
         )
@@ -2835,12 +2835,15 @@ async function handleBan(message, args) {
 async function handleTimeout(message, args) {
   if (!canTimeout(message.member)) return message.reply("Only staff with Timeout Members can timeout users.");
   const member = await resolveMemberArgument(message, args[0]);
-  const minutes = Number(args[1] || 10);
-  if (!member || Number.isNaN(minutes)) return message.reply("Usage: `!timeout @user-or-id minutes reason`");
-  const reason = args.slice(2).join(" ") || "No reason provided";
-  await member.timeout(minutes * 60 * 1000, reason);
-  await logModeration(message.guild, "Timeout", member.user, message.author, `${minutes} minutes - ${reason}`);
-  await message.reply(`Timed out ${member.user.tag}.`);
+  const duration = parseTimeoutDuration(args.slice(1));
+  if (!member || !duration) {
+    return message.reply("Usage: `!timeout @user-or-id 30m reason`, `!timeout @user-or-id 2h reason`, or `!timeout @user-or-id 3d reason`");
+  }
+
+  const reason = args.slice(1 + duration.consumed).join(" ") || "No reason provided";
+  await member.timeout(duration.ms, `${duration.label} - ${reason}`);
+  await logModeration(message.guild, "Timeout", member.user, message.author, `${duration.label} - ${reason}`);
+  await message.reply(`Timed out ${member.user.tag} for **${duration.label}**.`);
 }
 
 async function handleUnban(message, args) {
@@ -3082,6 +3085,48 @@ function punishmentDurationMs(punishment) {
   if (punishment.minutes) return punishment.minutes * 60 * 1000;
   if (punishment.hours) return punishment.hours * 60 * 60 * 1000;
   return Math.min((punishment.days || 1) * DAY_MS, 28 * DAY_MS);
+}
+
+function parseTimeoutDuration(args = []) {
+  const first = String(args[0] || "").trim().toLowerCase();
+  if (!first) return null;
+
+  const compact = first.match(/^(\d+(?:\.\d+)?)(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$/);
+  if (!compact) return null;
+
+  const amount = Number(compact[1]);
+  if (!amount || Number.isNaN(amount) || amount <= 0) return null;
+
+  let unit = compact[2] || "m";
+  let consumed = 1;
+
+  if (!compact[2] && args[1]) {
+    const maybeUnit = String(args[1]).trim().toLowerCase();
+    if (/^(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/.test(maybeUnit)) {
+      unit = maybeUnit;
+      consumed = 2;
+    }
+  }
+
+  const normalized = unit.startsWith("h") ? "hours" : unit.startsWith("d") ? "days" : "minutes";
+  const ms = normalized === "days"
+    ? amount * DAY_MS
+    : normalized === "hours"
+      ? amount * 60 * 60 * 1000
+      : amount * 60 * 1000;
+
+  const maxMs = 28 * DAY_MS;
+  if (ms > maxMs) return null;
+
+  const labelAmount = Number.isInteger(amount) ? amount : Number(amount.toFixed(2));
+  const singular = labelAmount === 1;
+  const labelUnit = normalized === "days" ? (singular ? "day" : "days") : normalized === "hours" ? (singular ? "hour" : "hours") : (singular ? "minute" : "minutes");
+
+  return {
+    ms,
+    label: `${labelAmount} ${labelUnit}`,
+    consumed
+  };
 }
 
 async function fetchReferencedMessage(message) {
