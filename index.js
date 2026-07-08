@@ -245,22 +245,28 @@ const STAFF_LOG_RULES = [
 ];
 const AUTOMOD_RULES = {
   invite: { label: "Discord invite link", delete: true, action: { action: "warn" } },
-  blockedterm: { label: "Blocked slur/NSFW term", delete: true, action: { action: "warn" } }
+  blockedterm: { label: "Severe blocked slur", delete: true, action: { action: "timeout", days: 3 } },
+  custombadword: { label: "Configured blocked word", delete: true, action: { action: "warn" } }
 };
 const BLOCKED_TERM_PATTERNS = [
-  /\bn[\W_]*i[\W_]*g[\W_]*g[\W_]*(a|e[\W_]*r|u[\W_]*h|o)\b/i,
-  /\bf[\W_]*a[\W_]*g([\W_]*g[\W_]*o[\W_]*t)?\b/i,
-  /\br[\W_]*e[\W_]*t[\W_]*a[\W_]*r[\W_]*d\b/i,
-  /\bk[\W_]*y[\W_]*s\b/i,
-  /\b(porn|porno|pornhub|xvideos|xnxx|onlyfans|nude|nudes|hentai|rule34|xxx|18\+)\b/i,
-  /\bsex[\W_]*(video|pic|image|link|content)\b/i
+  /\bf[\W_]*a[\W_]*g(?:[\W_]*g[\W_]*o[\W_]*t)?s?\b/i,
+  /\bn[\W_]*i[\W_]*g[\W_]*g[\W_]*(?:a|e[\W_]*r)s?\b/i,
+  /\bn[\W_]*i[\W_]*g[\W_]*g[\W_]*a[\W_]*w[\W_]*h[\W_]*o[\W_]*l[\W_]*e\b/i,
+  /\bf[\W_]*o[\W_]*i[\W_]*d[\W_]*s?\b/i,
+  /\bm[\W_]*o[\W_]*i[\W_]*d[\W_]*s?\b/i,
+  /\br[\W_]*e[\W_]*t[\W_]*a[\W_]*r[\W_]*d(?:[\W_]*e[\W_]*d)?s?\b/i,
+  /\bp[\W_]*o[\W_]*r[\W_]*c[\W_]*h[\W_-]*m[\W_]*o[\W_]*n[\W_]*k[\W_]*e[\W_]*y[\W_]*s?\b/i,
+  /\bc[\W_]*u[\W_]*n[\W_]*t[\W_]*s?\b/i,
+  /\bk[\W_]*(?:y[\W_]*)?k[\W_]*e[\W_]*s?\b/i,
+  /\bj[\W_]*i[\W_]*g[\W_]*a[\W_]*b[\W_]*o[\W_]*o[\W_]*s?\b/i,
+  /\bc[\W_]*o[\W_]*o[\W_]*n[\W_]*s?\b/i
 ];
 const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-z0-9-]+/i;
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
-const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "givepoint", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
   "What is your age?",
@@ -339,6 +345,7 @@ client.on("messageCreate", async (message) => {
     if (command === "badword") return handleBadWordCommand(message, args);
     if (command === "commandconfigure") return handleCommandConfigure(message, args);
     if (command === "logconfigure") return handleLogConfigure(message, args);
+    if (command === "botconfig") return handleBotConfig(message, args);
     if (command === "reactionroles") return handleReactionRoles(message);
     if ((command === "start" && args[0]?.toLowerCase() === "here") || command === "starthere") return handleStartHereCommand(message);
     if (command === "rules") return handleRules(message);
@@ -356,9 +363,6 @@ client.on("messageCreate", async (message) => {
     if (command === "analytics") return handleAnalytics(message);
     if (command === "serverstats") return handleServerStats(message);
     if (command === "staffstats") return handleStaffStats(message);
-    if (command === "givepoint") return handleGivePoint(message, args);
-    if (command === "testerleaderboard") return handleTesterLeaderboard(message);
-    if (command === "testerstats" || command.startsWith("testerstats")) return handleTesterStats(message);
     if (command === "claimticket") return handleClaimTicket(message);
     if (command === "add" || command === "addinticket") return handleTicketAdd(message);
     if (command === "remove" || command === "removefromticket") return handleTicketRemove(message);
@@ -525,6 +529,24 @@ function canPurge(member) {
   return isModerator(member) && member.permissions.has(PermissionsBitField.Flags.ManageMessages);
 }
 
+function canModerateTarget(actor, target, action = "moderate") {
+  if (!target) return { ok: true };
+  if (target.id === actor.id) return { ok: false, reason: `You cannot ${action} yourself.` };
+  if (target.id === actor.guild.ownerId) return { ok: false, reason: `You cannot ${action} the server owner.` };
+  if (actor.guild.members.me && target.id === actor.guild.members.me.id) return { ok: false, reason: `I cannot ${action} myself.` };
+
+  if (actor.id !== actor.guild.ownerId && target.roles.highest.comparePositionTo(actor.roles.highest) >= 0) {
+    return { ok: false, reason: `You cannot ${action} someone with an equal or higher role.` };
+  }
+
+  const botMember = actor.guild.members.me;
+  if (!botMember || target.roles.highest.comparePositionTo(botMember.roles.highest) >= 0) {
+    return { ok: false, reason: `I cannot ${action} someone with an equal or higher role than my bot role.` };
+  }
+
+  return { ok: true };
+}
+
 function isBotCommandChannel(channel) {
   return stripStyle(channel.name) === PLAYER_COMMAND_CHANNEL;
 }
@@ -553,7 +575,7 @@ function canUseStaffCommand(member, command) {
   if (["purge", "clear"].includes(command)) return canPurge(member);
   if (["kick"].includes(command)) return canKick(member);
   if (["ban", "unban", "tempban", "untempban"].includes(command)) return canBan(member);
-  if (["event", "endevent", "gcreate", "givepoint"].includes(command)) return isModerator(member);
+  if (["event", "endevent", "gcreate"].includes(command)) return isModerator(member);
 
   return isModerator(member);
 }
@@ -990,8 +1012,8 @@ async function handleAutoModCommand(message, args) {
         baseEmbed("AutoMod Settings")
           .addFields(
             field("Status", settings.autoModEnabled === false ? "Disabled" : "Enabled", true),
-            field("Filter", "Blocks Discord server invite links plus severe slur/NSFW terms."),
-            field("Action", "Deletes the message, warns the user, and logs a case."),
+            field("Filter", "Blocks Discord server invite links, configured bad words, and severe slurs."),
+            field("Action", "Deletes the message, applies the configured punishment, and logs a case."),
             field("Commands", "`!automod on`, `!automod off`, `!automod reset @user`")
           )
       ]
@@ -1135,6 +1157,61 @@ async function handleLogConfigure(message, args) {
 
   saveGuildSettings(message.guild.id, { ...settings, staffLogsChannelId: channel.id });
   return message.reply(`Staff logs from \`!log\` will now be sent to ${channel}.`);
+}
+
+async function handleBotConfig(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!botconfig`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const action = (args[0] || "status").toLowerCase();
+
+  if (["status", "show", "view"].includes(action)) {
+    const commandChannel = settings.botCommandsChannelId ? message.guild.channels.cache.get(settings.botCommandsChannelId) : findChannel(message.guild, PLAYER_COMMAND_CHANNEL);
+    const staffLogs = settings.staffLogsChannelId ? message.guild.channels.cache.get(settings.staffLogsChannelId) : findChannel(message.guild, "staff-logs");
+    return message.reply({
+      embeds: [
+        baseEmbed("Bot Configuration")
+          .addFields(
+            field("Prefix", settings.prefix || PREFIX, true),
+            field("AutoMod", settings.autoModEnabled === false ? "Off" : "On", true),
+            field("Player Command Channel", commandChannel ? `${commandChannel}` : "Not set"),
+            field("Staff Log Channel", staffLogs ? `${staffLogs}` : "Not set"),
+            field("Commands", "`!botconfig prefix !`, `!botconfig automod on/off`, `!botconfig commands #bot-commands`, `!botconfig stafflogs #staff-logs`")
+          )
+      ]
+    });
+  }
+
+  if (action === "prefix") {
+    const nextPrefix = args[1];
+    if (!nextPrefix || nextPrefix.length > 5) return message.reply("Usage: `!botconfig prefix !`");
+    saveGuildSettings(message.guild.id, { ...settings, prefix: nextPrefix });
+    return message.reply(`Prefix updated to \`${nextPrefix}\`.`);
+  }
+
+  if (action === "automod") {
+    const value = (args[1] || "").toLowerCase();
+    if (!["on", "off", "enable", "disable", "enabled", "disabled"].includes(value)) return message.reply("Usage: `!botconfig automod on` or `!botconfig automod off`");
+    const enabled = ["on", "enable", "enabled"].includes(value);
+    saveGuildSettings(message.guild.id, { ...settings, autoModEnabled: enabled });
+    return message.reply(`AutoMod is now **${enabled ? "on" : "off"}**.`);
+  }
+
+  if (["commands", "commandchannel", "botcommands"].includes(action)) {
+    const channel = message.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(args[1]));
+    if (!channel || channel.type !== ChannelType.GuildText) return message.reply("Usage: `!botconfig commands #bot-commands`");
+    saveGuildSettings(message.guild.id, { ...settings, botCommandsChannelId: channel.id });
+    return message.reply(`Player commands are now limited to ${channel}.`);
+  }
+
+  if (["stafflogs", "logs", "logchannel"].includes(action)) {
+    const channel = message.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(args[1]));
+    if (!channel || channel.type !== ChannelType.GuildText) return message.reply("Usage: `!botconfig stafflogs #staff-logs`");
+    saveGuildSettings(message.guild.id, { ...settings, staffLogsChannelId: channel.id });
+    return message.reply(`Staff logs will now go to ${channel}.`);
+  }
+
+  return message.reply("Usage: `!botconfig status`, `!botconfig prefix !`, `!botconfig automod on/off`, `!botconfig commands #channel`, `!botconfig stafflogs #channel`.");
 }
 
 async function handleStartHereCommand(message) {
@@ -1662,12 +1739,12 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
+          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!botconfig`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
-          field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`, `!givepoint @tester [amount] [reason]`, `!testerleaderboard`, `!testerstats @tester`")
+          field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`")
         )
     ]
   });
@@ -2169,59 +2246,6 @@ async function handleStaffStats(message) {
   });
 }
 
-async function handleGivePoint(message, args) {
-  if (!isStaff(message.member)) return message.reply("Only staff can give tester points.");
-  const user = message.mentions.users.first();
-  const amount = Number(args.find((arg) => /^-?\d+$/.test(arg)) || 1);
-  const reason = args.filter((arg) => !arg.startsWith("<@") && !/^-?\d+$/.test(arg)).join(" ") || "Tester contribution";
-  if (!user || Number.isNaN(amount)) return message.reply("Usage: `!givepoint @tester [amount] [reason]`");
-
-  const data = getGuildData(message.guild.id);
-  data.testerPoints ||= {};
-  const stats = data.testerPoints[user.id] ||= { points: 0, history: [] };
-  stats.points += amount;
-  stats.history.push({ amount, reason, staffId: message.author.id, at: Date.now() });
-  saveGuildData(message.guild.id, data);
-
-  await logTo(message.guild, "logs", "Tester Point Given", [
-    field("Tester", `${user.tag} (${user.id})`),
-    field("Points", amount, true),
-    field("Total", stats.points, true),
-    field("Staff", message.author.tag),
-    field("Reason", reason)
-  ]);
-  await message.reply(`Gave **${amount}** tester point(s) to **${user.tag}**. Total: **${stats.points}**.`);
-}
-
-async function handleTesterLeaderboard(message) {
-  const data = getGuildData(message.guild.id);
-  const leaders = Object.entries(data.testerPoints || {})
-    .sort(([, a], [, b]) => (b.points || 0) - (a.points || 0))
-    .slice(0, 10);
-
-  await message.reply({
-    embeds: [
-      baseEmbed("Tester Leaderboard")
-        .setDescription(leaders.map(([userId, stats], index) => `${index + 1}. <@${userId}> - **${stats.points || 0}** points`).join("\n") || "No tester points yet.")
-    ]
-  });
-}
-
-async function handleTesterStats(message) {
-  const user = message.mentions.users.first() || message.author;
-  const stats = getGuildData(message.guild.id).testerPoints?.[user.id] || { points: 0, history: [] };
-
-  await message.reply({
-    embeds: [
-      baseEmbed(`Tester Stats - ${user.tag}`)
-        .addFields(
-          field("Points", stats.points || 0, true),
-          field("Recent Points", (stats.history || []).slice(-5).map((entry) => `${entry.amount > 0 ? "+" : ""}${entry.amount} - ${entry.reason} (<@${entry.staffId}>)`).join("\n") || "No point history.")
-        )
-    ]
-  });
-}
-
 function getTicketMetaForChannel(guildId, channelId) {
   return getGuildData(guildId).ticketMeta?.[channelId] || null;
 }
@@ -2597,6 +2621,9 @@ async function handleWarn(message, args) {
   if (!canWarn(message.member)) return message.reply("Only staff with warning permission can warn users.");
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!warn @user-or-id reason`");
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "warn");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
   const reason = args.slice(1).join(" ") || "No reason provided";
   const data = getGuildData(message.guild.id);
   data.warnings[user.id] ||= [];
@@ -2679,10 +2706,8 @@ async function handlePunish(message, args) {
   }
 
   const member = await message.guild.members.fetch(user.id).catch(() => null);
-  if (member && isStaff(member)) {
-    await message.reply("I will not punish staff members with this command.");
-    return;
-  }
+  const targetCheck = canModerateTarget(message.member, member, "punish");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   const referencedMessage = await fetchReferencedMessage(message);
   const deleted = referencedMessage ? await referencedMessage.delete().then(() => true).catch(() => false) : false;
@@ -2739,7 +2764,8 @@ async function handleStaffLog(message) {
   if (!user) return message.channel.send("I could not find that user. Run `!log` again and send a valid mention or user ID.");
 
   const member = await message.guild.members.fetch(user.id).catch(() => null);
-  if (member && isStaff(member)) return message.channel.send("I will not auto-punish staff members with this command.");
+  const targetCheck = canModerateTarget(message.member, member, "log/punish");
+  if (!targetCheck.ok) return message.channel.send(targetCheck.reason);
 
   await message.channel.send({
     embeds: [
@@ -2945,6 +2971,9 @@ async function handleManualTempBan(message, args) {
     await message.reply("Usage: `!tempban @user-or-id days reason`");
     return;
   }
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "tempban");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   await applyTempBan(message.guild, user, days, reason, message.author);
   const data = getGuildData(message.guild.id);
@@ -2991,6 +3020,8 @@ async function handleKick(message, args) {
   if (!canKick(message.member)) return message.reply("Only Moderator+ with Kick Members can kick users.");
   const member = await resolveMemberArgument(message, args[0]);
   if (!member) return message.reply("Usage: `!kick @user-or-id reason`");
+  const targetCheck = canModerateTarget(message.member, member, "kick");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await member.send(`You were kicked from ${message.guild.name}: ${reason}`).catch(() => {});
   await member.kick(reason);
@@ -3002,6 +3033,9 @@ async function handleBan(message, args) {
   if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can ban users.");
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!ban @user-or-id reason`");
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "ban");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await user.send(`You were banned from ${message.guild.name}: ${reason}`).catch(() => {});
   await message.guild.members.ban(user.id, { reason });
@@ -3016,6 +3050,8 @@ async function handleTimeout(message, args) {
   if (!member || !duration) {
     return message.reply("Usage: `!timeout @user-or-id 30m reason`, `!timeout @user-or-id 2h reason`, or `!timeout @user-or-id 3d reason`");
   }
+  const targetCheck = canModerateTarget(message.member, member, "timeout");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   const reason = args.slice(1 + duration.consumed).join(" ") || "No reason provided";
   await member.timeout(duration.ms, `${duration.label} - ${reason}`);
@@ -3048,6 +3084,8 @@ async function handleUntimeout(message, args) {
   if (!canTimeout(message.member)) return message.reply("Only staff with Timeout Members can remove timeouts.");
   const member = await resolveMemberArgument(message, args[0]);
   if (!member) return message.reply("Usage: `!untimeout @user-or-id reason`");
+  const targetCheck = canModerateTarget(message.member, member, "untimeout");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await member.timeout(null, `${reason} - ${message.author.tag}`);
   const data = getGuildData(message.guild.id);
@@ -3539,14 +3577,27 @@ async function handleAutoMod(message, settings = {}) {
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
 
-  await message.author.send(`Your message in ${message.guild.name} was removed because it broke the server AutoMod filter.`).catch(() => {});
+  const actionError = await applyPunishmentAction(message.guild, message.author, message.member, punishment, `AutoMod: ${rule.label}`, client.user)
+    .then(() => null)
+    .catch((error) => error);
+
+  await message.author.send(`Your message in ${message.guild.name} was removed because it broke the server AutoMod filter. Action: ${formatPunishment(punishment)}.`).catch(() => {});
+  if (actionError) {
+    await logTo(message.guild, "mod-logs", "AutoMod Action Failed", [
+      field("User", `${message.author.tag} (${message.author.id})`),
+      field("Action", formatPunishment(punishment), true),
+      field("Error", actionError.message)
+    ]);
+  }
   await logAutoModAction(message, rule, result, punishment, deleted, caseId);
 }
 
-function detectAutoModInfraction(message) {
+function detectAutoModInfraction(message, settings = getGuildSettings(message.guild.id) || {}) {
   const content = message.content || "";
   if (DISCORD_INVITE_PATTERN.test(content)) return { ruleKey: "invite", reason: "Discord server invite link detected." };
-  if (BLOCKED_TERM_PATTERNS.some((pattern) => pattern.test(content))) return { ruleKey: "blockedterm", reason: "Blocked slur or NSFW term detected." };
+  if (BLOCKED_TERM_PATTERNS.some((pattern) => pattern.test(content))) return { ruleKey: "blockedterm", reason: "Severe blocked slur detected." };
+  const customMatch = findBadWordMatch(content, settings.badWords || []);
+  if (customMatch) return { ruleKey: "custombadword", reason: `Configured blocked word detected: ${customMatch}` };
   return null;
 }
 
