@@ -33,6 +33,7 @@ const BRAND = "Kaiju Reincarnated";
 const BOT_VERSION = "2026-06-14-command-config-cases";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
+const BAN_APPEAL_INVITE = "https://discord.gg/Zv7uGG3SYj";
 const XP_COOLDOWN = 60 * 1000;
 const QUESTION_TIMEOUT = 2 * 60 * 1000;
 const STAFF_APP_QUESTION_TIMEOUT = 20 * 60 * 1000;
@@ -426,11 +427,7 @@ client.on("guildBanAdd", async (ban) => {
 
 client.on("messageDelete", async (message) => {
   if (!message.guild || message.author?.bot) return;
-  await logTo(message.guild, "message-logs", "Message Deleted", [
-    field("User", `${message.author?.tag || "Unknown"}`),
-    field("Channel", `${message.channel}`),
-    field("Content", (message.content || "No content").slice(0, 1000))
-  ]);
+  await logDeletedMessage(message);
 });
 
 client.on("messageUpdate", async (oldMessage, newMessage) => {
@@ -1546,7 +1543,7 @@ async function postRulesEmbed(guild, summary) {
   if (!channel) return;
 
   const oldRules = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-  if (oldRules?.some((message) => message.author.id === client.user.id && message.embeds[0]?.title?.includes("Kaiju Reincarnated Rules"))) {
+  if (oldRules?.some((message) => message.author.id === client.user.id && /rules/i.test(message.embeds[0]?.title || ""))) {
     summary.skipped.push("Rules embed");
     return;
   }
@@ -1555,7 +1552,7 @@ async function postRulesEmbed(guild, summary) {
   summary.created.push("Rules embed");
 }
 
-function buildRulesEmbed() {
+function buildRulesEmbedLegacy() {
   return baseEmbed("📋 Kaiju Reincarnated Rules", "#2563eb")
     .setDescription("🎮 **Welcome to Kaiju Reincarnated!**\n\nStaff use common sense when moderating. Anything not listed can still be actioned at staff discretion, and rules may be updated at any time.")
     .addFields(
@@ -1625,6 +1622,63 @@ function buildRulesEmbed() {
       }
     )
     .setFooter({ text: "Use common sense. Staff may escalate punishments based on severity and history." });
+}
+
+function buildRulesEmbed() {
+  return baseEmbed("📋 RULES", "#2563eb")
+    .setDescription("@everyone\n━━━━━━━━━━━━━━━━━━━━━")
+    .addFields(
+      field("Behaviour", [
+        "Be respectful to everyone.",
+        "No harassment, no slurs, no disrespectful language, and no drama in any chat.",
+        "Do not provoke arguments or target other members.",
+        "No provoking any suicidal actions."
+      ].join("\n")),
+      field("Boundaries & Staff's Respect", [
+        "No DMing developers and administrators if they don't allow it.",
+        "No pinging developers and administrators+ unless they allow it.",
+        "No constantly asking developers about updates.",
+        "No harassment towards any staff member.",
+        "You can DM mods and senior mods, but avoid DMing or disturbing developers and administrators unless they allow it."
+      ].join("\n")),
+      field("No Politics", "Do not talk about wars, political figures, political controversies, bad events, or royal families."),
+      field("No Spam & Advertising", [
+        "Do not spam, flood, or use excessive emojis in any channel.",
+        "Advertising and self-promotion are not allowed unless approved as a game content creator."
+      ].join("\n")),
+      field("Content", [
+        "No NSFW or 18+ content.",
+        "No loud noises videos.",
+        "No videos that could trigger epilepsy.",
+        "Violent or gore content will not be tolerated whatsoever.",
+        "Do not share ANY personal information."
+      ].join("\n")),
+      field("Channel Usage", "Use channels only for their intended purpose."),
+      field("Voice Channels", "No loud noises, soundboard spam, or disrespectful language in voice channels."),
+      field("Moderation", [
+        "Do not discuss moderation issues in chat. Open a ticket instead.",
+        "Do not impersonate staff.",
+        "Do not backseat moderate.",
+        "No ban evasion. Using alt accounts to dodge a punishment counts as a new offence."
+      ].join("\n")),
+      field("Scams & Links", "No phishing, scam links, fake free Nitro/skins links, or suspicious downloads."),
+      field("🎮 IN-GAME RULES", "━━━━━━━━━━━━━━━━━━━━━"),
+      field("Fair Play", [
+        "No exploiting or abusing bugs/glitches, and no farming using alt accounts or friends.",
+        "No cheats, hacks, or unauthorised third-party software.",
+        "Report every bug you find to staff. Any bug abuse will result in a heavy punishment."
+      ].join("\n")),
+      field("❗ IMPORTANT", "━━━━━━━━━━━━━━━━━━━━━"),
+      field("Follow Discord's Terms of Service", [
+        "Anyone not following Discord's ToS will be punished instantly.",
+        "[Terms of Service](https://discord.com/terms)",
+        "[Community Guidelines](https://discord.com/guidelines)",
+        "[Privacy Policy](https://discord.com/privacy)"
+      ].join("\n")),
+      field("Common Sense", "Anything not listed here can still be actioned at staff discretion, and rules may be updated at any time."),
+      field("Banned Words", "foid and moid.")
+    )
+    .setFooter({ text: "Rules may be updated at any time." });
 }
 
 async function handleGuideButton(interaction) {
@@ -3037,7 +3091,7 @@ async function handleBan(message, args) {
   const targetCheck = canModerateTarget(message.member, member, "ban");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
   const reason = args.slice(1).join(" ") || "No reason provided";
-  await user.send(`You were banned from ${message.guild.name}: ${reason}`).catch(() => {});
+  await user.send(banDmText(message.guild, reason)).catch(() => {});
   await message.guild.members.ban(user.id, { reason });
   await logModeration(message.guild, "Ban", user, message.author, reason);
   await message.reply(`Banned ${user.tag}.`);
@@ -3373,7 +3427,7 @@ async function applyPunishmentAction(guild, user, member, punishment, reason, mo
   }
 
   if (punishment.action === "ban") {
-    await user.send(`You were permanently banned from ${guild.name}: ${reason}`).catch(() => {});
+    await user.send(banDmText(guild, reason)).catch(() => {});
     await guild.members.ban(user.id, { reason: `${reason} - ${moderator.tag}` });
   }
 }
@@ -3391,7 +3445,7 @@ async function applyTempBan(guild, user, days, reason, moderator) {
   };
   saveGuildData(guild.id, data);
 
-  await user.send(`You were temporarily banned from ${guild.name} for ${days} day(s): ${reason}`).catch(() => {});
+  await user.send(banDmText(guild, reason, `${days} day(s)`)).catch(() => {});
   await guild.members.ban(user.id, { reason: `${reason} - tempban ${days}d - ${moderator.tag}` });
   await logTo(guild, "mod-logs", "Temporary Ban", [
     field("User", `${user.tag} (${user.id})`),
@@ -3523,6 +3577,51 @@ async function askDmQuestion(dm, userId, question, timeout) {
 function cleanChannelId(value = "") {
   const match = String(value).match(/\d{15,25}/);
   return match?.[0] || null;
+}
+
+function banDmText(guild, reason, duration = null) {
+  return [
+    `You were ${duration ? `temporarily banned from ${guild.name} for ${duration}` : `banned from ${guild.name}`}.`,
+    `Reason: ${reason}`,
+    `You can appeal in this Discord server: ${BAN_APPEAL_INVITE}`
+  ].join("\n");
+}
+
+async function logDeletedMessage(message) {
+  const channel = findChannel(message.guild, "message-logs");
+  if (!channel) return;
+
+  const media = getDeletedMessageMedia(message);
+  const embed = baseEmbed("Message Deleted")
+    .addFields(
+      field("User", `${message.author?.tag || "Unknown"} (${message.author?.id || "unknown"})`),
+      field("Channel", `${message.channel}`),
+      field("Content", (message.content || media.firstUrl || "No text content.").slice(0, 1000))
+    )
+    .setFooter({ text: BRAND });
+
+  if (media.imageUrl) embed.setImage(media.imageUrl);
+  if (media.urls.length) embed.addFields(field("Media / Attachments", media.urls.slice(0, 5).join("\n").slice(0, 1000)));
+
+  await channel.send({ content: media.firstUrl || undefined, embeds: [embed] }).catch(() => {});
+}
+
+function getDeletedMessageMedia(message) {
+  const attachmentUrls = message.attachments?.map((attachment) => attachment.url) || [];
+  const contentUrls = (message.content || "").match(URL_PATTERN) || [];
+  const urls = [...new Set([...attachmentUrls, ...contentUrls])];
+  const imageUrl = urls.find((url) => isRenderableMediaUrl(url)) || null;
+
+  return {
+    urls,
+    imageUrl,
+    firstUrl: urls[0] || null
+  };
+}
+
+function isRenderableMediaUrl(url = "") {
+  return /\.(png|jpe?g|gif|webp)(?:\?.*)?$/i.test(url)
+    || /media\.discordapp\.net|cdn\.discordapp\.com|tenor\.com\/view|media\.tenor\.com|c.tenor\.com|giphy\.com|media\.giphy\.com/i.test(url);
 }
 
 async function logTo(guild, channelName, title, fields) {
