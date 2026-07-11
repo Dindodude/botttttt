@@ -1977,6 +1977,7 @@ async function handleCcConfig(message, args) {
   const action = (args.shift() || "status").toLowerCase();
   const role = getConfiguredCcRole(message.guild, settings);
   const reviewerRoles = getConfiguredCcReviewerRoles(message.guild, settings);
+  const ticketViewerRoles = getConfiguredCcTicketViewerRoles(message.guild, settings);
 
   if (["status", "show", "view"].includes(action)) {
     return message.reply({
@@ -1985,9 +1986,10 @@ async function handleCcConfig(message, args) {
           .addFields(
             field("CC Role", role ? `<@&${role.id}>` : "Not set. Use `!ccconfig role @Content Creator`."),
             field("Who Can Approve/Deny", reviewerRoles.length ? reviewerRoles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ") : "Admins only"),
+            field("Who Can See CC Tickets", ticketViewerRoles.length ? ticketViewerRoles.map((viewerRole) => `<@&${viewerRole.id}>`).join(", ") : "No roles set. Use `!ccconfig ticketroles @role`."),
             field("Approve Message", settings.ccApproveMessage || "Default approval message"),
             field("Deny Message", settings.ccDenyMessage || "Default denial message"),
-            field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig clearreviewers`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`")
+            field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig ticketroles @role @role2`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`")
           )
       ]
     });
@@ -2006,12 +2008,29 @@ async function handleCcConfig(message, args) {
     if (!roles.length) return message.reply("Mention who can approve/deny CC applications. Example: `!ccconfig reviewers @Administrator @Manager`");
 
     saveGuildSettings(message.guild.id, { ...settings, ccReviewerRoleIds: roles.map((reviewerRole) => reviewerRole.id) });
-    return message.reply(`CC approver roles updated: ${roles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ")}.`);
+    const synced = await syncCcTicketViewerPermissions(message.guild);
+    return message.reply(`CC approver roles updated: ${roles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ")}. Synced ${synced} open CC ticket(s).`);
+  }
+
+  if (["ticketroles", "viewers", "visibility", "ticketviewers"].includes(action)) {
+    const roles = getRolesFromArgs(message, args);
+    if (!roles.length) return message.reply("Mention the roles that should see CC tickets. Example: `!ccconfig ticketroles @Administrator @CC Manager`");
+
+    saveGuildSettings(message.guild.id, { ...settings, ccTicketViewerRoleIds: roles.map((viewerRole) => viewerRole.id) });
+    const synced = await syncCcTicketViewerPermissions(message.guild);
+    return message.reply(`CC ticket visibility updated. Only the applicant, bot, and these roles will see CC tickets: ${roles.map((viewerRole) => `<@&${viewerRole.id}>`).join(", ")}. Synced ${synced} open CC ticket(s).`);
   }
 
   if (["clearreviewers", "clearapprovers"].includes(action)) {
     saveGuildSettings(message.guild.id, { ...settings, ccReviewerRoleIds: [] });
-    return message.reply("CC approver roles cleared. Only admins can approve/deny now.");
+    const synced = await syncCcTicketViewerPermissions(message.guild);
+    return message.reply(`CC approver roles cleared. Only admins can approve/deny now. Synced ${synced} open CC ticket(s).`);
+  }
+
+  if (["clearticketroles", "clearviewers", "clearvisibility"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, ccTicketViewerRoleIds: [] });
+    const synced = await syncCcTicketViewerPermissions(message.guild);
+    return message.reply(`CC ticket viewer roles cleared. CC tickets will fall back to approver roles if they are set. Synced ${synced} open CC ticket(s).`);
   }
 
   if (["approvemessage", "approvedmessage"].includes(action)) {
@@ -2033,7 +2052,7 @@ async function handleCcConfig(message, args) {
     return message.reply("CC approval/denial messages reset to default.");
   }
 
-  return message.reply("Usage: `!ccconfig status`, `!ccconfig role @role`, `!ccconfig reviewers @role`, `!ccconfig clearreviewers`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`.");
+  return message.reply("Usage: `!ccconfig status`, `!ccconfig role @role`, `!ccconfig reviewers @role`, `!ccconfig ticketroles @role`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`.");
 }
 
 async function handleCcApply(interaction) {
@@ -2230,7 +2249,7 @@ function buildCcTicketOverwrites(guild, userId) {
     }
   ];
 
-  for (const role of [...getStaffRoleObjects(guild), ...getConfiguredCcReviewerRoles(guild)]) {
+  for (const role of getConfiguredCcTicketViewerRoles(guild)) {
     overwrites.push({
       id: role.id,
       allow: [
@@ -2268,6 +2287,15 @@ function getConfiguredCcRole(guild, settings = getGuildSettings(guild.id) || {})
 function getConfiguredCcReviewerRoles(guild, settings = getGuildSettings(guild.id) || {}) {
   const roleIds = Array.isArray(settings.ccReviewerRoleIds) ? settings.ccReviewerRoleIds : [];
   return roleIds.map((roleId) => guild.roles.cache.get(roleId)).filter(Boolean);
+}
+
+function getConfiguredCcTicketViewerRoles(guild, settings = getGuildSettings(guild.id) || {}) {
+  const configuredViewerIds = Array.isArray(settings.ccTicketViewerRoleIds) ? settings.ccTicketViewerRoleIds : [];
+  const viewerRoles = configuredViewerIds.map((roleId) => guild.roles.cache.get(roleId)).filter(Boolean);
+  if (viewerRoles.length) return viewerRoles;
+
+  // If admins only configured approvers, reuse those roles for ticket visibility.
+  return getConfiguredCcReviewerRoles(guild, settings);
 }
 
 function normalizeRoleName(name = "") {
@@ -2317,6 +2345,29 @@ function markCcTicketReviewed(guildId, channelId, status, reviewerId) {
     data.ticketMeta[channelId].ccReviewedAt = Date.now();
     saveGuildData(guildId, data);
   }
+}
+
+async function syncCcTicketViewerPermissions(guild) {
+  const data = getGuildData(guild.id);
+  data.ticketMeta ||= {};
+  let synced = 0;
+
+  for (const [channelId, meta] of Object.entries(data.ticketMeta)) {
+    if (meta?.type !== "cc" || !meta.ownerId) continue;
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || channel.type !== ChannelType.GuildText) continue;
+
+    await channel.permissionOverwrites.set(
+      buildCcTicketOverwrites(guild, meta.ownerId),
+      "Sync Content Creator ticket visibility"
+    ).then(() => {
+      synced += 1;
+    }).catch((error) => {
+      console.error("CC ticket permission sync failed:", error);
+    });
+  }
+
+  return synced;
 }
 
 async function handleStaffAppSetup(message) {

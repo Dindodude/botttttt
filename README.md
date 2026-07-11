@@ -129,6 +129,7 @@ This creates/checks:
 - `!ccpanel` - admin Content Creator application panel
 - `!ccconfig role @Content Creator` - set the role given by `!ccapprove`
 - `!ccconfig reviewers @role` - set which roles can use `!ccapprove` and `!ccdeny`
+- `!ccconfig ticketroles @role` - set which roles can see private CC tickets
 - `!bugreport` - guided bug report
 - `!rank`, `!leaderboard`, `!level` - XP system
 - `!event`, `!endevent` - staff event posts
