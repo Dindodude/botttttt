@@ -266,8 +266,8 @@ const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.co
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
-const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "ccpanel", "ccconfig", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "ccapprove", "ccdeny", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
   "What is your age?",
@@ -354,6 +354,10 @@ client.on("messageCreate", async (message) => {
     if (command === "suggest") return handleSuggest(message, args);
     if (command === "review") return handleReview(message);
     if (command === "ticketpanel") return handleTicketPanel(message);
+    if (command === "ccpanel") return handleCcPanel(message);
+    if (command === "ccconfig") return handleCcConfig(message, args);
+    if (command === "ccapprove") return handleCcApprove(message, args);
+    if (command === "ccdeny") return handleCcDeny(message, args);
     if (command === "staffapp") return handleStaffAppSetup(message);
     if (command === "bugreport") return handleBugReport(message);
     if (command === "event") return handleEvent(message);
@@ -461,6 +465,7 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isButton()) return;
 
   try {
+    if (interaction.customId === "cc:apply") return handleCcApply(interaction);
     if (interaction.customId.startsWith("ticket:")) return handleTicketButton(interaction);
     if (interaction.customId.startsWith("ticketclose:")) return closeTicket(interaction);
     if (interaction.customId.startsWith("ticketdelete:")) return deleteTicket(interaction);
@@ -526,6 +531,13 @@ function canPurge(member) {
   return isModerator(member) && member.permissions.has(PermissionsBitField.Flags.ManageMessages);
 }
 
+function canUseCcReview(member) {
+  if (isAdmin(member)) return true;
+  const settings = getGuildSettings(member.guild.id) || {};
+  const reviewerRoleIds = Array.isArray(settings.ccReviewerRoleIds) ? settings.ccReviewerRoleIds : [];
+  return reviewerRoleIds.some((roleId) => member.roles.cache.has(roleId));
+}
+
 function canModerateTarget(actor, target, action = "moderate") {
   if (!target) return { ok: true };
   if (target.id === actor.id) return { ok: false, reason: `You cannot ${action} yourself.` };
@@ -563,6 +575,7 @@ function isAllowedCommandUse(message, command, args, settings = {}) {
 }
 
 function canUseStaffCommand(member, command) {
+  if (["ccapprove", "ccdeny"].includes(command)) return canUseCcReview(member);
   if (!isStaff(member)) return false;
 
   if (["staffcommands", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warnings", "cases", "case", "punishments"].includes(command)) return true;
@@ -1793,9 +1806,9 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!botconfig`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`"),
+          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!botconfig`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!ccpanel`, `!ccconfig`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
-          field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, legacy aliases: `!add @user`, `!remove @user`"),
+          field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, `!ccapprove @user`, `!ccdeny @user reason`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
           field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`")
@@ -1944,6 +1957,366 @@ async function handleTicketPanel(message) {
     embeds: [baseEmbed("Support Tickets").setDescription("Choose the ticket type that matches what you need.")],
     components: [row]
   });
+}
+
+async function handleCcPanel(message) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can send the CC panel.");
+
+  await message.channel.send({
+    embeds: [buildCcPanelEmbed(message.guild)],
+    components: [buildCcPanelRow()]
+  });
+
+  await message.reply("Content Creator application panel posted.");
+}
+
+async function handleCcConfig(message, args) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can use `!ccconfig`.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const action = (args.shift() || "status").toLowerCase();
+  const role = getConfiguredCcRole(message.guild, settings);
+  const reviewerRoles = getConfiguredCcReviewerRoles(message.guild, settings);
+
+  if (["status", "show", "view"].includes(action)) {
+    return message.reply({
+      embeds: [
+        baseEmbed("Content Creator Configuration")
+          .addFields(
+            field("CC Role", role ? `<@&${role.id}>` : "Not set. Use `!ccconfig role @Content Creator`."),
+            field("Who Can Approve/Deny", reviewerRoles.length ? reviewerRoles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ") : "Admins only"),
+            field("Approve Message", settings.ccApproveMessage || "Default approval message"),
+            field("Deny Message", settings.ccDenyMessage || "Default denial message"),
+            field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig clearreviewers`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`")
+          )
+      ]
+    });
+  }
+
+  if (action === "role") {
+    const targetRole = message.mentions.roles.first() || message.guild.roles.cache.get(cleanRoleId(args[0]));
+    if (!targetRole) return message.reply("Mention the role to give on approval. Example: `!ccconfig role @Content Creator`");
+
+    saveGuildSettings(message.guild.id, { ...settings, ccRoleId: targetRole.id });
+    return message.reply(`Content Creator approval role set to ${targetRole}.`);
+  }
+
+  if (["reviewers", "approvers", "allowed"].includes(action)) {
+    const roles = getRolesFromArgs(message, args);
+    if (!roles.length) return message.reply("Mention who can approve/deny CC applications. Example: `!ccconfig reviewers @Administrator @Manager`");
+
+    saveGuildSettings(message.guild.id, { ...settings, ccReviewerRoleIds: roles.map((reviewerRole) => reviewerRole.id) });
+    return message.reply(`CC approver roles updated: ${roles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ")}.`);
+  }
+
+  if (["clearreviewers", "clearapprovers"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, ccReviewerRoleIds: [] });
+    return message.reply("CC approver roles cleared. Only admins can approve/deny now.");
+  }
+
+  if (["approvemessage", "approvedmessage"].includes(action)) {
+    const text = args.join(" ").trim();
+    if (!text) return message.reply("Usage: `!ccconfig approvemessage Your Content Creator application was approved!`");
+    saveGuildSettings(message.guild.id, { ...settings, ccApproveMessage: text.slice(0, 1000) });
+    return message.reply("CC approval DM message updated.");
+  }
+
+  if (["denymessage", "deniedmessage"].includes(action)) {
+    const text = args.join(" ").trim();
+    if (!text) return message.reply("Usage: `!ccconfig denymessage Unfortunately, you did not fit the Content Creator requirements.`");
+    saveGuildSettings(message.guild.id, { ...settings, ccDenyMessage: text.slice(0, 1000) });
+    return message.reply("CC denial DM message updated.");
+  }
+
+  if (["resetmessages", "clearmessages"].includes(action)) {
+    saveGuildSettings(message.guild.id, { ...settings, ccApproveMessage: null, ccDenyMessage: null });
+    return message.reply("CC approval/denial messages reset to default.");
+  }
+
+  return message.reply("Usage: `!ccconfig status`, `!ccconfig role @role`, `!ccconfig reviewers @role`, `!ccconfig clearreviewers`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`.");
+}
+
+async function handleCcApply(interaction) {
+  const guild = interaction.guild;
+  const data = getGuildData(guild.id);
+  data.tickets ||= {};
+
+  const existing = data.tickets[`${interaction.user.id}:cc`];
+  if (existing && guild.channels.cache.has(existing)) {
+    return interaction.reply({ content: `You already have an open Content Creator ticket: <#${existing}>`, ephemeral: true });
+  }
+
+  if (!guild.members.me.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    return interaction.reply({ content: "I need Manage Channels permission to create CC tickets.", ephemeral: true });
+  }
+
+  const category = await ensureCcTicketCategory(guild);
+  const channelName = `cc-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 90) || `cc-${interaction.user.id}`;
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: category?.id || null,
+    permissionOverwrites: buildCcTicketOverwrites(guild, interaction.user.id),
+    reason: "Content Creator application ticket"
+  }).catch((error) => {
+    console.error("CC ticket create failed:", error);
+    return null;
+  });
+
+  if (!channel) return interaction.reply({ content: "I could not create your CC ticket. Please tell staff.", ephemeral: true });
+
+  data.tickets[`${interaction.user.id}:cc`] = channel.id;
+  data.ticketMeta ||= {};
+  data.ticketMeta[channel.id] = {
+    ownerId: interaction.user.id,
+    type: "cc",
+    claimedBy: null,
+    createdAt: Date.now(),
+    closedAt: null
+  };
+  data.analytics ||= {};
+  data.analytics.tickets = (data.analytics.tickets || 0) + 1;
+  saveGuildData(guild.id, data);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticketclose:${interaction.user.id}:cc`).setLabel("Close Ticket").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`tickettranscript:${interaction.user.id}:cc`).setLabel("Transcript").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`ticketdelete:${interaction.user.id}:cc`).setLabel("Delete Ticket").setStyle(ButtonStyle.Danger)
+  );
+
+  await channel.send({
+    content: `${interaction.user}`,
+    embeds: [buildCcTicketEmbed(interaction.user)],
+    components: [row]
+  });
+
+  await interaction.reply({ content: `Created your Content Creator application ticket: ${channel}`, ephemeral: true });
+}
+
+async function handleCcApprove(message, args) {
+  if (!canUseCcReview(message.member)) return message.reply("You are not configured to approve Content Creator applications.");
+
+  const { user } = await resolveCcApplicant(message, args);
+  if (!user) return message.reply("Usage: `!ccapprove @user` or run `!ccapprove` inside that user's CC ticket.");
+
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  if (!member) return message.reply("That user is not in this server, so I cannot give them the Content Creator role.");
+
+  const targetCheck = canModerateTarget(message.member, member, "approve");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const role = getConfiguredCcRole(message.guild, settings);
+  if (!role) return message.reply("No Content Creator role is configured. Run `!ccconfig role @Content Creator` first.");
+
+  const roleError = getRoleManageError(message.guild, role);
+  if (roleError) return message.reply(roleError);
+
+  await member.roles.add(role, `CC application approved by ${message.author.tag}`);
+  markCcTicketReviewed(message.guild.id, message.channel.id, "Approved", message.author.id);
+
+  const dmText = settings.ccApproveMessage || `Your Content Creator application in ${message.guild.name} was approved. You now have the Content Creator role.`;
+  await user.send(dmText).catch(() => message.channel.send(`${user}, your Content Creator application was approved.`).catch(() => {}));
+
+  await logTo(message.guild, "logs", "CC Application Approved", [
+    field("Applicant", `${user.tag} (${user.id})`),
+    field("Reviewer", `${message.author.tag} (${message.author.id})`),
+    field("Role Given", role.name)
+  ]);
+
+  await message.reply(`Approved ${user.tag} and gave ${role}.`);
+}
+
+async function handleCcDeny(message, args) {
+  if (!canUseCcReview(message.member)) return message.reply("You are not configured to deny Content Creator applications.");
+
+  const resolved = await resolveCcApplicant(message, args);
+  const user = resolved.user;
+  if (!user) return message.reply("Usage: `!ccdeny @user reason` or run `!ccdeny reason` inside that user's CC ticket.");
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const reason = resolved.remainingArgs.join(" ").trim();
+  const defaultText = `Unfortunately, you did not fit the Content Creator requirements for ${message.guild.name}. You can improve your content and try again later.`;
+  const dmText = `${settings.ccDenyMessage || defaultText}${reason ? `\nReason: ${reason}` : ""}`;
+
+  markCcTicketReviewed(message.guild.id, message.channel.id, "Denied", message.author.id);
+  await user.send(dmText).catch(() => message.channel.send(`${user}, your Content Creator application was denied. ${reason || "Unfortunately, you did not fit the requirements."}`).catch(() => {}));
+
+  await logTo(message.guild, "logs", "CC Application Denied", [
+    field("Applicant", `${user.tag} (${user.id})`),
+    field("Reviewer", `${message.author.tag} (${message.author.id})`),
+    field("Reason", reason || "Did not fit the requirements")
+  ]);
+
+  await message.reply(`Denied ${user.tag}.`);
+}
+
+function buildCcPanelEmbed(guild) {
+  const icon = guild.iconURL({ size: 256 });
+  const embed = baseEmbed("Kaiju Reincarnated CC Requirements and Benefits", "#f59e0b")
+    .setDescription("Apply for the Content Creator program below. Please read the requirements before opening a ticket.")
+    .addFields(
+      field("Requirements", [
+        "1. Must have `discord.gg/kaijureincarnated` in the video and comments.",
+        "2. At least 1000 TikTok followers OR",
+        "3. At least 750 YouTube followers."
+      ].join("\n")),
+      field("Benefits", [
+        "1. A dedicated spot to post your videos.",
+        "2. 300 Robux if your video hits 20k+ views.",
+        "3. Content Creator role."
+      ].join("\n")),
+      field("How to Apply", "Click the button below and send staff your TikTok/YouTube proof, video link, and follower proof inside the private ticket.")
+    )
+    .setFooter({ text: "Kaiju Reincarnated Content Creator Program" });
+
+  if (icon) embed.setThumbnail(icon);
+  return embed;
+}
+
+function buildCcPanelRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("cc:apply")
+      .setLabel("Apply for Content Creator")
+      .setStyle(ButtonStyle.Success)
+  );
+}
+
+function buildCcTicketEmbed(user) {
+  return baseEmbed("Content Creator Application Ticket", "#f59e0b")
+    .setDescription("Staff will review your Content Creator application here. Send your proof in this channel.")
+    .addFields(
+      field("Applicant", `${user} (${user.id})`),
+      field("Send These", [
+        "1. Your TikTok or YouTube profile link.",
+        "2. Screenshot/proof of follower count.",
+        "3. Video link showing `discord.gg/kaijureincarnated` in the video and comments.",
+        "4. Anything else staff should know."
+      ].join("\n")),
+      field("Staff Commands", "`!ccapprove` to approve inside this ticket, or `!ccdeny reason` to deny.")
+    );
+}
+
+async function ensureCcTicketCategory(guild) {
+  const existing = guild.channels.cache.find((channel) => (
+    channel.type === ChannelType.GuildCategory
+    && ["support", "ticket", "content creator"].some((word) => stripStyle(channel.name).includes(word))
+  ));
+  if (existing) return existing;
+
+  return guild.channels.create({
+    name: "CONTENT CREATOR APPLICATIONS",
+    type: ChannelType.GuildCategory,
+    permissionOverwrites: staffOverwrites(guild),
+    reason: "Content Creator application tickets"
+  }).catch(() => null);
+}
+
+function buildCcTicketOverwrites(guild, userId) {
+  const overwrites = [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.MentionEveryone] },
+    botFullOverwrite(guild),
+    {
+      id: userId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.EmbedLinks,
+        PermissionFlagsBits.AttachFiles
+      ],
+      deny: [PermissionFlagsBits.MentionEveryone]
+    }
+  ];
+
+  for (const role of [...getStaffRoleObjects(guild), ...getConfiguredCcReviewerRoles(guild)]) {
+    overwrites.push({
+      id: role.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageMessages
+      ],
+      deny: [PermissionFlagsBits.MentionEveryone]
+    });
+  }
+
+  return uniqueOverwrites(overwrites);
+}
+
+function uniqueOverwrites(overwrites) {
+  const byId = new Map();
+  for (const overwrite of overwrites) {
+    if (!byId.has(overwrite.id)) byId.set(overwrite.id, overwrite);
+  }
+  return [...byId.values()];
+}
+
+function getConfiguredCcRole(guild, settings = getGuildSettings(guild.id) || {}) {
+  if (settings.ccRoleId) {
+    const configured = guild.roles.cache.get(settings.ccRoleId);
+    if (configured) return configured;
+  }
+
+  return guild.roles.cache.find((role) => normalizeRoleName(role.name) === "content creator")
+    || guild.roles.cache.find((role) => normalizeRoleName(role.name).includes("content creator"))
+    || null;
+}
+
+function getConfiguredCcReviewerRoles(guild, settings = getGuildSettings(guild.id) || {}) {
+  const roleIds = Array.isArray(settings.ccReviewerRoleIds) ? settings.ccReviewerRoleIds : [];
+  return roleIds.map((roleId) => guild.roles.cache.get(roleId)).filter(Boolean);
+}
+
+function normalizeRoleName(name = "") {
+  return stripStyle(name).replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
+}
+
+function getRolesFromArgs(message, args) {
+  const roles = [...message.mentions.roles.values()];
+  for (const value of args) {
+    const role = message.guild.roles.cache.get(cleanRoleId(value));
+    if (role && !roles.some((existing) => existing.id === role.id)) roles.push(role);
+  }
+  return roles;
+}
+
+function cleanRoleId(value = "") {
+  const match = String(value).match(/\d{15,25}/);
+  return match?.[0] || null;
+}
+
+function getRoleManageError(guild, role) {
+  const botMember = guild.members.me;
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) return "I need Manage Roles permission to give that role.";
+  if (botMember.roles.highest.comparePositionTo(role) <= 0) return "I cannot give that role because my bot role is not above it.";
+  return null;
+}
+
+async function resolveCcApplicant(message, args) {
+  const explicitUser = await resolveUserArgument(message, args[0]);
+  if (explicitUser) return { user: explicitUser, remainingArgs: args.slice(1) };
+
+  const meta = getTicketMetaForChannel(message.guild.id, message.channel.id);
+  if (meta?.type === "cc" && meta.ownerId) {
+    const user = await message.client.users.fetch(meta.ownerId).catch(() => null);
+    if (user) return { user, remainingArgs: args };
+  }
+
+  return { user: null, remainingArgs: args };
+}
+
+function markCcTicketReviewed(guildId, channelId, status, reviewerId) {
+  const data = getGuildData(guildId);
+  data.ticketMeta ||= {};
+  if (data.ticketMeta[channelId]?.type === "cc") {
+    data.ticketMeta[channelId].ccStatus = status;
+    data.ticketMeta[channelId].ccReviewedBy = reviewerId;
+    data.ticketMeta[channelId].ccReviewedAt = Date.now();
+    saveGuildData(guildId, data);
+  }
 }
 
 async function handleStaffAppSetup(message) {

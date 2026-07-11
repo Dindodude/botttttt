@@ -126,10 +126,14 @@ This creates/checks:
 - `!suggest [idea]` - submit a suggestion
 - `!review` - submit a review
 - `!ticketpanel` - admin ticket panel
+- `!ccpanel` - admin Content Creator application panel
+- `!ccconfig role @Content Creator` - set the role given by `!ccapprove`
+- `!ccconfig reviewers @role` - set which roles can use `!ccapprove` and `!ccdeny`
 - `!bugreport` - guided bug report
 - `!rank`, `!leaderboard`, `!level` - XP system
 - `!event`, `!endevent` - staff event posts
 - `!warn`, `!warnings`, `!kick`, `!ban`, `!timeout` - moderation
+- `!ccapprove @user`, `!ccdeny @user reason` - review Content Creator applications
 - `!analytics`, `!serverstats` - stats
 - `!backup`, `!restorebackup`, `!configview`, `!configreload`, `!configreset` - config tools
 
