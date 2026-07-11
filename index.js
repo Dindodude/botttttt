@@ -2176,14 +2176,15 @@ function buildCcPanelEmbed(guild) {
     .setDescription("Apply for the Content Creator program below. Please read the requirements before opening a ticket.")
     .addFields(
       field("Requirements", [
-        "1. Must have `discord.gg/kaijureincarnated` in the video and comments.",
-        "2. At least 1000 TikTok followers OR",
-        "3. At least 750 YouTube followers."
+        "1. 3 videos on Kaiju Reincarnated.",
+        "2. Must have `discord.gg/kaijureincarnated` in all 3 videos and comments.",
+        "3. At least 1000 TikTok followers OR",
+        "4. At least 750 YouTube followers."
       ].join("\n")),
       field("Benefits", [
-        "1. A dedicated spot to post your videos.",
-        "2. 300 Robux if your video hits 20k+ views.",
-        "3. Content Creator role."
+        "A dedicated spot to post your videos.",
+        "300 Robux if your video hits 20k+ views.",
+        "Content Creator role."
       ].join("\n")),
       field("How to Apply", "Click the button below and send staff your TikTok/YouTube proof, video link, and follower proof inside the private ticket.")
     )
