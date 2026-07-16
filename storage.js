@@ -14,7 +14,10 @@ function readJson(filePath, fallback) {
   ensureFile(filePath, fallback);
 
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    // Some Windows editors add a UTF-8 byte-order marker. JSON.parse does not
+    // accept it, so remove it before parsing instead of resetting valid data.
+    const content = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+    return JSON.parse(content);
   } catch (error) {
     const backup = `${filePath}.broken-${Date.now()}`;
     fs.copyFileSync(filePath, backup);
@@ -31,6 +34,105 @@ function writeJson(filePath, data) {
 
 let settings = readJson(SETTINGS_FILE, {});
 let database = readJson(DATABASE_FILE, {});
+
+function createAnalytics() {
+  return {
+    joins: 0,
+    leaves: 0,
+    messages: 0,
+    tickets: 0,
+    suggestions: 0,
+    reviews: 0,
+    punishments: 0,
+    channelMessages: {},
+    activeUsers: {}
+  };
+}
+
+function createGuildData() {
+  return {
+    warnings: {},
+    cases: [],
+    nextCaseId: 1,
+    xp: {},
+    tickets: {},
+    ticketMeta: {},
+    suggestions: [],
+    reviews: [],
+    events: {},
+    giveaways: {},
+    tempBans: {},
+    punishments: {},
+    autoMod: {},
+    autoModRecent: {},
+    staffStats: {},
+    staffApplications: {},
+    staffAppConfig: {},
+    staffLogPoints: {},
+    staffLogVotes: {},
+    analytics: createAnalytics()
+  };
+}
+
+function objectOr(value, fallback = {}) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+}
+
+function arrayOr(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeGuildData(value) {
+  const source = objectOr(value);
+  const defaults = createGuildData();
+  const normalized = { ...defaults, ...source };
+
+  for (const key of [
+    "warnings",
+    "xp",
+    "tickets",
+    "ticketMeta",
+    "events",
+    "giveaways",
+    "tempBans",
+    "punishments",
+    "autoMod",
+    "autoModRecent",
+    "staffStats",
+    "staffApplications",
+    "staffAppConfig",
+    "staffLogPoints",
+    "staffLogVotes"
+  ]) {
+    normalized[key] = objectOr(source[key]);
+  }
+
+  normalized.cases = arrayOr(source.cases);
+  normalized.suggestions = arrayOr(source.suggestions);
+  normalized.reviews = arrayOr(source.reviews);
+  normalized.nextCaseId = Number.isSafeInteger(source.nextCaseId) && source.nextCaseId > 0
+    ? source.nextCaseId
+    : Math.max(0, ...normalized.cases.map((entry) => Number(entry?.id) || 0)) + 1;
+
+  const analytics = objectOr(source.analytics);
+  normalized.analytics = {
+    ...createAnalytics(),
+    ...analytics,
+    channelMessages: objectOr(analytics.channelMessages),
+    activeUsers: objectOr(analytics.activeUsers)
+  };
+
+  for (const key of ["joins", "leaves", "messages", "tickets", "suggestions", "reviews", "punishments"]) {
+    normalized.analytics[key] = Number.isFinite(Number(normalized.analytics[key]))
+      ? Number(normalized.analytics[key])
+      : 0;
+  }
+
+  // Keep the existing object reference. Some command helpers update the same
+  // guild record during one action (for example ticket stats while closing).
+  Object.assign(source, normalized);
+  return source;
+}
 
 function getGuildSettings(guildId) {
   return settings[guildId] || null;
@@ -58,34 +160,14 @@ function reloadSettings() {
 }
 
 function getGuildData(guildId) {
-  database[guildId] ||= {
-    warnings: {},
-    cases: [],
-    nextCaseId: 1,
-    xp: {},
-    tickets: {},
-    suggestions: [],
-    reviews: [],
-    events: {},
-    analytics: {
-      joins: 0,
-      leaves: 0,
-      messages: 0,
-      tickets: 0,
-      suggestions: 0,
-      reviews: 0,
-      punishments: 0,
-      channelMessages: {},
-      activeUsers: {}
-    }
-  };
+  database[guildId] = normalizeGuildData(database[guildId]);
   return database[guildId];
 }
 
 function saveGuildData(guildId, data) {
-  database[guildId] = data;
+  database[guildId] = normalizeGuildData(data);
   writeJson(DATABASE_FILE, database);
-  return data;
+  return database[guildId];
 }
 
 module.exports = {
@@ -95,5 +177,6 @@ module.exports = {
   clearGuildSettings,
   reloadSettings,
   getGuildData,
-  saveGuildData
+  saveGuildData,
+  normalizeGuildData
 };

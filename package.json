@@ -4,7 +4,9 @@
   "description": "Kaiju Reincarnated Discord community bot using discord.js v14.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node --check index.js && node --check storage.js && node verify-commands.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.0.0"

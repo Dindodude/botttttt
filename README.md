@@ -34,7 +34,7 @@ If JustRun shows a run command field, use:
 node /bot/index.js
 ```
 
-The Docker image stores code in `/bot` on purpose so an `/app` volume cannot hide updated code. Persistent bot data should use:
+The Docker image stores code in `/bot` on purpose, so an `/app` volume cannot hide updated code. Persistent bot data uses:
 
 ```text
 /app/data
@@ -108,7 +108,7 @@ The workflow pushes this tag:
 v1_autodeploy
 ```
 
-Important: do not mount a volume over `/app`, or any Docker image can still be hidden by old files. Persistent storage should be `/app/data` only.
+It is safe to keep the JustRun persistent volume mounted at `/app`; the running code is in `/bot`. Do not mount a volume over `/bot`.
 
 This creates/checks:
 
@@ -116,7 +116,7 @@ This creates/checks:
 - Public, testing, staff, support, and voice channels
 - Safe role permissions
 - Welcome, auto role, join logs, start guide
-- Suggestions, reviews, tickets, bug reports, XP, events, moderation, analytics, backups, and config commands
+- Suggestions, reviews, tickets, bug reports, events, moderation, analytics, backups, and config commands
 
 ## Main Commands
 
@@ -129,14 +129,35 @@ This creates/checks:
 - `!ccpanel` - admin Content Creator application panel
 - `!ccconfig role @Content Creator` - set the role given by `!ccapprove`
 - `!ccconfig reviewers @role` - set which roles can use `!ccapprove` and `!ccdeny`
-- `!ccconfig ticketroles @role` - set which roles can see private CC tickets
+- `!ccconfig ticketroles @role` - set which roles can see and manage private CC tickets
 - `!bugreport` - guided bug report
-- `!rank`, `!leaderboard`, `!level` - XP system
+- `!rank`, `!leaderboard`, `!level` - explains that Noctaly handles levels
 - `!event`, `!endevent` - staff event posts
-- `!warn`, `!warnings`, `!kick`, `!ban`, `!timeout` - moderation
+- `!warn`, `!warnings`, `!kick`, `!ban`, `!tempban`, `!untempban`, `!timeout` - moderation
 - `!ccapprove @user`, `!ccdeny @user reason` - review Content Creator applications
 - `!analytics`, `!serverstats` - stats
 - `!backup`, `!restorebackup`, `!configview`, `!configreload`, `!configreset` - config tools
+
+Temporary ban examples:
+
+```text
+!tempban @user 30m repeated spam
+!tempban @user 12h harassment
+!tempban @user 14d impersonating staff
+```
+
+A plain number remains compatible with the old command and means days: `!tempban @user 14 reason`.
+
+## Verification
+
+Before deploying an update, run:
+
+```text
+npm run check
+npm test
+```
+
+The command check verifies every routed command/button handler and the tests cover saved-data compatibility, user IDs, timeout durations, temp-ban durations, and the current appeal invite.
 
 ## Auto Roles
 

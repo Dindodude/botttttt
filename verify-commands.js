@@ -1,0 +1,61 @@
+const fs = require("fs");
+const path = require("path");
+
+const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8").replace(/^\uFEFF/, "");
+const failures = [];
+
+const messageRouter = source.match(/client\.on\("messageCreate"[\s\S]*?client\.on\("guildMemberAdd"/)?.[0] || "";
+const routedCommands = new Set(
+  [...messageRouter.matchAll(/command\s*===\s*"([^"]+)"/g)].map((match) => match[1])
+);
+
+const handlerReferences = [
+  ...source.matchAll(/return\s+(handle[A-Za-z0-9_]+)\s*\(/g),
+  ...source.matchAll(/return\s+(closeTicket|deleteTicket)\s*\(/g)
+].map((match) => match[1]);
+
+const handlerDefinitions = new Set(
+  [...source.matchAll(/(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/g)].map((match) => match[1])
+);
+
+for (const handler of new Set(handlerReferences)) {
+  if (!handlerDefinitions.has(handler)) failures.push(`Missing handler definition: ${handler}`);
+}
+
+for (const setName of ["ADMIN_COMMANDS", "STAFF_COMMANDS"]) {
+  const body = source.match(new RegExp(`const ${setName} = new Set\\(\\[([\\s\\S]*?)\\]\\);`))?.[1] || "";
+  const commands = [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  for (const command of commands) {
+    if (!routedCommands.has(command)) failures.push(`${setName} contains an unrouted command: ${command}`);
+  }
+}
+
+const interactionRouter = source.match(/client\.on\("interactionCreate"[\s\S]*?function isAdmin/)?.[0] || "";
+const requiredButtons = [
+  "cc:apply",
+  "ticket:",
+  "ticketclose:",
+  "ticketdelete:",
+  "tickettranscript:",
+  "rr:",
+  "staffapp:start:",
+  "staffappreview:",
+  "stafflogvote:",
+  "giveaway:enter:",
+  "guide:"
+];
+
+for (const customId of requiredButtons) {
+  if (!interactionRouter.includes(`"${customId}"`)) failures.push(`Missing button route: ${customId}`);
+}
+
+if (!source.includes("https://discord.gg/WQ4U3ARjue")) failures.push("Ban appeal invite is not current.");
+if (source.includes("https://discord.gg/Zv7uGG3SYj")) failures.push("Old ban appeal invite is still present.");
+
+if (failures.length) {
+  console.error("Command verification failed:");
+  for (const failure of failures) console.error(`- ${failure}`);
+  process.exit(1);
+}
+
+console.log(`Command verification passed: ${routedCommands.size} command names/aliases and ${new Set(handlerReferences).size} referenced handlers checked.`);

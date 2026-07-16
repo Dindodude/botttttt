@@ -30,10 +30,10 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-06-14-command-config-cases";
+const BOT_VERSION = "2026-07-15-command-audit-ticket-tempban";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
-const BAN_APPEAL_INVITE = "https://discord.gg/Zv7uGG3SYj";
+const BAN_APPEAL_INVITE = "https://discord.gg/WQ4U3ARjue";
 const XP_COOLDOWN = 60 * 1000;
 const QUESTION_TIMEOUT = 2 * 60 * 1000;
 const STAFF_APP_QUESTION_TIMEOUT = 20 * 60 * 1000;
@@ -266,6 +266,8 @@ const DISCORD_INVITE_PATTERN = /(discord\.gg|discord\.com\/invite|discordapp\.co
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com|discordapp\.(net|com)\/attachments)/i;
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
+const recentBotModerationActions = new Map();
+const activeStaffApplications = new Set();
 const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "ccpanel", "ccconfig", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
 const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "ccapprove", "ccdeny", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
@@ -302,7 +304,7 @@ client.once("ready", () => {
   rotateStatus();
   checkExpiredTempBans();
   checkGiveaways();
-  setInterval(checkExpiredTempBans, 10 * 60 * 1000).unref();
+  setInterval(checkExpiredTempBans, 60 * 1000).unref();
   setInterval(checkGiveaways, GIVEAWAY_CHECK_MS).unref();
 });
 
@@ -367,7 +369,7 @@ client.on("messageCreate", async (message) => {
     if (command === "leaderboard") return handleLeaderboard(message);
     if (command === "analytics") return handleAnalytics(message);
     if (command === "serverstats") return handleServerStats(message);
-    if (command === "staffstats") return handleStaffStats(message);
+    if (command === "staffstats") return handleStaffStats(message, args);
     if (command === "claimticket") return handleClaimTicket(message);
     if (command === "add" || command === "addinticket") return handleTicketAdd(message);
     if (command === "remove" || command === "removefromticket") return handleTicketRemove(message);
@@ -418,14 +420,18 @@ client.on("guildMemberRemove", async (member) => {
   saveGuildData(member.guild.id, data);
   await sendJoinLog(member, "Member Left");
 
+  if (consumeBotModerationAction(member.guild.id, "kick", member.id)) return;
+
   const kickLog = await fetchRecentAuditEntry(member.guild, AuditLogEvent.MemberKick, member.id);
-  if (kickLog) {
+  if (kickLog && kickLog.executor?.id !== client.user.id) {
     await logExternalModeration(member.guild, "Kick", member.user, kickLog.executor, kickLog.reason || "No reason provided");
   }
 });
 
 client.on("guildBanAdd", async (ban) => {
+  if (consumeBotModerationAction(ban.guild.id, "ban", ban.user.id)) return;
   const banLog = await fetchRecentAuditEntry(ban.guild, AuditLogEvent.MemberBanAdd, ban.user.id);
+  if (banLog?.executor?.id === client.user.id) return;
   await logExternalModeration(ban.guild, "Ban", ban.user, banLog?.executor, banLog?.reason || ban.reason || "No reason provided");
 });
 
@@ -538,6 +544,30 @@ function canUseCcReview(member) {
   return reviewerRoleIds.some((roleId) => member.roles.cache.has(roleId));
 }
 
+function canManageTicket(member, channel) {
+  if (!member || !channel?.guild) return false;
+  if (isStaff(member)) return true;
+
+  const meta = getTicketMetaForChannel(channel.guild.id, channel.id);
+  if (!meta) return false;
+
+  // CC ticket viewer roles are explicitly granted Manage Messages. Checking
+  // effective channel permissions also supports custom roles added by admins.
+  return typeof member.permissionsIn === "function"
+    && member.permissionsIn(channel).has(PermissionFlagsBits.ManageMessages);
+}
+
+function markBotModerationAction(guildId, action, userId) {
+  recentBotModerationActions.set(`${guildId}:${action}:${userId}`, Date.now());
+}
+
+function consumeBotModerationAction(guildId, action, userId) {
+  const key = `${guildId}:${action}:${userId}`;
+  const at = recentBotModerationActions.get(key);
+  recentBotModerationActions.delete(key);
+  return Number.isFinite(at) && Date.now() - at < 60 * 1000;
+}
+
 function canModerateTarget(actor, target, action = "moderate") {
   if (!target) return { ok: true };
   if (target.id === actor.id) return { ok: false, reason: `You cannot ${action} yourself.` };
@@ -566,7 +596,12 @@ function isAllowedCommandUse(message, command, args, settings = {}) {
   const staffOnly = STAFF_COMMANDS.has(commandKey);
 
   if (adminOnly) return isAdmin(message.member);
-  if (staffOnly) return canUseStaffCommand(message.member, commandKey);
+  if (staffOnly) {
+    // Let recognized staff reach the command handler so it can explain the
+    // exact missing permission. Normal members still receive no command reply.
+    if (isStaff(message.member)) return true;
+    return canUseStaffCommand(message.member, commandKey, message.channel);
+  }
   if (isStaff(message.member)) return true;
 
   const allowedChannelId = settings.botCommandsChannelId;
@@ -574,8 +609,11 @@ function isAllowedCommandUse(message, command, args, settings = {}) {
   return isBotCommandChannel(message.channel);
 }
 
-function canUseStaffCommand(member, command) {
+function canUseStaffCommand(member, command, channel = null) {
   if (["ccapprove", "ccdeny"].includes(command)) return canUseCcReview(member);
+  if (["claimticket", "add", "addinticket", "remove", "removefromticket"].includes(command)) {
+    return canManageTicket(member, channel);
+  }
   if (!isStaff(member)) return false;
 
   if (["staffcommands", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "warnings", "cases", "case", "punishments"].includes(command)) return true;
@@ -1810,7 +1848,8 @@ async function handleStaffCommands(message) {
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, `!ccapprove @user`, `!ccdeny @user reason`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
-          field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`, `!ban`, `!unban`, `!tempban`, `!untempban`"),
+          field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`"),
+          field("Ban Members Permission", "`!ban`, `!unban`, `!tempban @user/id 30m/12h/14d reason`, `!untempban`"),
           field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`")
         )
     ]
@@ -1831,16 +1870,20 @@ async function handleHelp(message) {
 
 async function handleSuggest(message, args) {
   const suggestion = args.join(" ").trim();
-  if (!suggestion) return message.reply(`Usage: \`${PREFIX}suggest [your suggestion]\``);
+  const prefix = (getGuildSettings(message.guild.id) || {}).prefix || PREFIX;
+  if (!suggestion) return message.reply(`Usage: \`${prefix}suggest [your suggestion]\``);
 
-  await message.delete().catch(() => {});
   const publicChannel = findChannel(message.guild, "suggestions");
   const logChannel = findChannel(message.guild, "suggestion-submissions");
+  if (!publicChannel) return message.reply("I could not find the suggestions channel. Ask an admin to run the server setup command.");
+
+  await message.delete().catch(() => {});
   const embed = baseEmbed("Community Suggestion")
     .setDescription(suggestion.slice(0, 4000))
     .addFields(field("Suggested by", message.author.tag, true));
 
-  const sent = await publicChannel?.send({ embeds: [embed] }).catch(() => null);
+  const sent = await publicChannel.send({ embeds: [embed] }).catch(() => null);
+  if (!sent) return message.channel.send("I could not post the suggestion. Check my Send Messages and Embed Links permissions.").catch(() => {});
   await sent?.react("👍").catch(() => {});
   await sent?.react("👎").catch(() => {});
   await logChannel?.send({ embeds: [embed.setTitle("Suggestion Submission")] }).catch(() => {});
@@ -1852,6 +1895,9 @@ async function handleSuggest(message, args) {
 }
 
 async function handleReview(message) {
+  const publicChannel = findChannel(message.guild, "reviews");
+  if (!publicChannel) return message.reply("I could not find the reviews channel. Ask an admin to run the server setup command.");
+
   const ratingReply = await ask(message, "How many stars? 1-5", (reply) => /^[1-5]$/.test(reply.content.trim()));
   if (!ratingReply) return;
   const reasonReply = await ask(message, "Why did you give this rating? Type `skip` to leave it blank.");
@@ -1864,7 +1910,8 @@ async function handleReview(message) {
   await Promise.all([message.delete().catch(() => {}), ratingReply.delete().catch(() => {}), reasonReply.delete().catch(() => {})]);
 
   const embed = baseEmbed("Community Review").setDescription(line);
-  await findChannel(message.guild, "reviews")?.send({ embeds: [embed] }).catch(() => {});
+  const sent = await publicChannel.send({ embeds: [embed] }).catch(() => null);
+  if (!sent) return message.channel.send("I could not post the review. Check my Send Messages and Embed Links permissions.").catch(() => {});
   await findChannel(message.guild, "review-submissions")?.send({ embeds: [embed] }).catch(() => {});
 
   const data = getGuildData(message.guild.id);
@@ -1874,15 +1921,16 @@ async function handleReview(message) {
 }
 
 async function handlePurge(message, args) {
-  if (!canPurge(message.member)) return;
+  if (!canPurge(message.member)) return message.reply("Only Moderator+ with Manage Messages can purge messages.");
 
   const amount = Number(args[0] || 0);
   if (!amount || Number.isNaN(amount) || amount < 1 || amount > 100) {
     return message.reply("Usage: `!purge 1-100` or `!clear 1-100`");
   }
 
-  const deleted = await message.channel.bulkDelete(amount + 1, true).catch(async (error) => {
-    await message.reply(`Could not purge messages: ${error.message}`);
+  await message.delete().catch(() => {});
+  const deleted = await message.channel.bulkDelete(amount, true).catch(async (error) => {
+    await message.channel.send(`Could not purge messages: ${error.message}`).catch(() => {});
     return null;
   });
   if (!deleted) return;
@@ -1890,7 +1938,7 @@ async function handlePurge(message, args) {
   await logTo(message.guild, "mod-logs", "Messages Purged", [
     field("Channel", `${message.channel}`),
     field("Moderator", message.author.tag),
-    field("Amount", Math.max(deleted.size - 1, 0), true)
+    field("Amount", deleted.size, true)
   ]);
 }
 
@@ -1902,7 +1950,7 @@ async function handleReactionRoles(message) {
     ? mentionedRoles
     : [findRole(message.guild, ROLE_NAMES.announcement)].filter(Boolean);
 
-  const safeRoles = roles.filter((role) => !isUnsafeAutoRole(role));
+  const safeRoles = roles.filter((role) => !isUnsafeAutoRole(role)).slice(0, 25);
   if (!safeRoles.length) return message.reply("Mention at least one safe role. Example: `!reactionroles @Announcement Ping`");
 
   const components = [];
@@ -1989,7 +2037,7 @@ async function handleCcConfig(message, args) {
             field("Who Can See CC Tickets", ticketViewerRoles.length ? ticketViewerRoles.map((viewerRole) => `<@&${viewerRole.id}>`).join(", ") : "No roles set. Use `!ccconfig ticketroles @role`."),
             field("Approve Message", settings.ccApproveMessage || "Default approval message"),
             field("Deny Message", settings.ccDenyMessage || "Default denial message"),
-            field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig ticketroles @role @role2`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`")
+            field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig ticketroles @role @role2`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`, `!ccconfig resetmessages`")
           )
       ]
     });
@@ -1998,6 +2046,9 @@ async function handleCcConfig(message, args) {
   if (action === "role") {
     const targetRole = message.mentions.roles.first() || message.guild.roles.cache.get(cleanRoleId(args[0]));
     if (!targetRole) return message.reply("Mention the role to give on approval. Example: `!ccconfig role @Content Creator`");
+    if (isUnsafeAutoRole(targetRole)) return message.reply("I will not configure an admin, moderation, manage, or mass-ping role as the Content Creator approval role.");
+    const roleError = getRoleManageError(message.guild, targetRole);
+    if (roleError) return message.reply(roleError);
 
     saveGuildSettings(message.guild.id, { ...settings, ccRoleId: targetRole.id });
     return message.reply(`Content Creator approval role set to ${targetRole}.`);
@@ -2052,7 +2103,7 @@ async function handleCcConfig(message, args) {
     return message.reply("CC approval/denial messages reset to default.");
   }
 
-  return message.reply("Usage: `!ccconfig status`, `!ccconfig role @role`, `!ccconfig reviewers @role`, `!ccconfig ticketroles @role`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`.");
+  return message.reply("Usage: `!ccconfig status`, `!ccconfig role @role`, `!ccconfig reviewers @role`, `!ccconfig ticketroles @role`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`, `!ccconfig resetmessages`.");
 }
 
 async function handleCcApply(interaction) {
@@ -2152,6 +2203,10 @@ async function handleCcDeny(message, args) {
   const resolved = await resolveCcApplicant(message, args);
   const user = resolved.user;
   if (!user) return message.reply("Usage: `!ccdeny @user reason` or run `!ccdeny reason` inside that user's CC ticket.");
+
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "deny");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   const settings = getGuildSettings(message.guild.id) || {};
   const reason = resolved.remainingArgs.join(" ").trim();
@@ -2358,14 +2413,23 @@ async function syncCcTicketViewerPermissions(guild) {
     const channel = guild.channels.cache.get(channelId);
     if (!channel || channel.type !== ChannelType.GuildText) continue;
 
-    await channel.permissionOverwrites.set(
+    const didSync = await channel.permissionOverwrites.set(
       buildCcTicketOverwrites(guild, meta.ownerId),
       "Sync Content Creator ticket visibility"
     ).then(() => {
       synced += 1;
+      return true;
     }).catch((error) => {
       console.error("CC ticket permission sync failed:", error);
+      return false;
     });
+    if (!didSync) continue;
+
+    if (meta.claimedBy) {
+      const claimer = await guild.members.fetch(meta.claimedBy).catch(() => null);
+      if (claimer) await hideClaimedTicketFromOtherMods(channel, claimer, meta.ownerId);
+    }
+    if (meta.closedAt) await lockTicketParticipants(channel, meta, meta.claimedBy);
   }
 
   return synced;
@@ -2383,6 +2447,10 @@ async function handleStaffAppSetup(message) {
 
   if (!resultChannel || resultChannel.type !== ChannelType.GuildText) {
     return message.reply("That is not a valid text channel. Run `!staffapp` again and mention a channel.");
+  }
+  const resultPermissions = resultChannel.permissionsFor(message.guild.members.me);
+  if (!resultPermissions?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) {
+    return message.reply(`I need View Channel, Send Messages, and Embed Links in ${resultChannel}.`);
   }
 
   const data = getGuildData(message.guild.id);
@@ -2414,51 +2482,65 @@ async function handleStaffAppStart(interaction) {
   const resultChannel = interaction.guild.channels.cache.get(resultChannelId);
   if (!resultChannel) return interaction.reply({ content: "The staff application result channel no longer exists. Tell the owner to run `!staffapp` again.", ephemeral: true });
 
+  const sessionKey = `${interaction.guild.id}:${interaction.user.id}`;
+  if (activeStaffApplications.has(sessionKey)) {
+    return interaction.reply({ content: "You already have a staff application in progress in your DMs.", ephemeral: true });
+  }
+  activeStaffApplications.add(sessionKey);
+
   await interaction.reply({ content: "Check your DMs. You have 20 minutes for each question.", ephemeral: true });
 
-  const dm = await interaction.user.createDM().catch(() => null);
-  if (!dm) {
-    return interaction.followUp({ content: "I could not DM you. Please open your DMs and click the button again.", ephemeral: true }).catch(() => {});
-  }
-
-  await dm.send(`Starting your ${BRAND} staff application. You have 20 minutes to answer each question.`).catch(() => null);
-
-  const answers = [];
-  for (const question of STAFF_APP_QUESTIONS) {
-    const answer = await askDmQuestion(dm, interaction.user.id, question, STAFF_APP_QUESTION_TIMEOUT);
-    if (!answer) {
-      await dm.send("Application timed out. Click the application button again when you are ready.").catch(() => {});
+  try {
+    const dm = await interaction.user.createDM().catch(() => null);
+    if (!dm) {
+      await interaction.followUp({ content: "I could not DM you. Please open your DMs and click the button again.", ephemeral: true }).catch(() => {});
       return;
     }
-    answers.push(answer);
-  }
 
-  const appId = Date.now().toString(36);
-  const data = getGuildData(interaction.guild.id);
-  data.staffApplications ||= {};
-  data.staffApplications[appId] = {
-    id: appId,
-    userId: interaction.user.id,
-    userTag: interaction.user.tag,
-    answers,
-    status: "Pending",
-    resultChannelId,
-    createdAt: Date.now()
-  };
-  saveGuildData(interaction.guild.id, data);
+    const started = await dm.send(`Starting your ${BRAND} staff application. You have 20 minutes to answer each question.`).catch(() => null);
+    if (!started) {
+      await interaction.followUp({ content: "I could not send you a DM. Enable server-member DMs and click the button again.", ephemeral: true }).catch(() => {});
+      return;
+    }
 
-  const row = buildStaffAppReviewRow(interaction.user.id, appId);
-  const sent = await resultChannel.send({
-    embeds: [buildStaffApplicationEmbed(interaction.user, answers, "Pending")],
-    components: [row]
-  }).catch(() => null);
+    const answers = [];
+    for (const question of STAFF_APP_QUESTIONS) {
+      const answer = await askDmQuestion(dm, interaction.user.id, question, STAFF_APP_QUESTION_TIMEOUT);
+      if (!answer) {
+        await dm.send("Application timed out. Click the application button again when you are ready.").catch(() => {});
+        return;
+      }
+      answers.push(answer);
+    }
 
-  if (sent) {
-    data.staffApplications[appId].messageId = sent.id;
+    const appId = Date.now().toString(36);
+    const data = getGuildData(interaction.guild.id);
+    data.staffApplications[appId] = {
+      id: appId,
+      userId: interaction.user.id,
+      userTag: interaction.user.tag,
+      answers,
+      status: "Pending",
+      resultChannelId,
+      createdAt: Date.now()
+    };
     saveGuildData(interaction.guild.id, data);
-    await dm.send("Your staff application was submitted. Staff will review it soon.").catch(() => {});
-  } else {
-    await dm.send("I could not submit your application because the result channel is unavailable. Please tell staff.").catch(() => {});
+
+    const row = buildStaffAppReviewRow(interaction.user.id, appId);
+    const sent = await resultChannel.send({
+      embeds: [buildStaffApplicationEmbed(interaction.user, answers, "Pending")],
+      components: [row]
+    }).catch(() => null);
+
+    if (sent) {
+      data.staffApplications[appId].messageId = sent.id;
+      saveGuildData(interaction.guild.id, data);
+      await dm.send("Your staff application was submitted. Staff will review it soon.").catch(() => {});
+    } else {
+      await dm.send("I could not submit your application because the result channel is unavailable. Please tell staff.").catch(() => {});
+    }
+  } finally {
+    activeStaffApplications.delete(sessionKey);
   }
 }
 
@@ -2474,16 +2556,19 @@ async function handleStaffAppReview(interaction) {
   let dmText = "";
 
   if (action === "approve") {
-    status = "Approved";
-    dmText = `Your staff application for ${interaction.guild.name} was approved. Welcome to the team.`;
     const member = await interaction.guild.members.fetch(userId).catch(() => null);
     const role = findRole(interaction.guild, ROLE_NAMES.trialMod);
-    if (member && role) {
-      const botMember = interaction.guild.members.me;
-      if (botMember.permissions.has(PermissionFlagsBits.ManageRoles) && botMember.roles.highest.comparePositionTo(role) > 0) {
-        await member.roles.add(role, "Staff application approved").catch(() => {});
-      }
-    }
+    if (!member) return interaction.reply({ content: "The applicant is no longer in this server, so I cannot approve them.", ephemeral: true });
+    if (!role) return interaction.reply({ content: "The Trial Moderator role does not exist. Run `!rolesetup` first.", ephemeral: true });
+    if (!member.manageable) return interaction.reply({ content: "I cannot manage that applicant. Move my bot role above their highest role.", ephemeral: true });
+    const roleError = getRoleManageError(interaction.guild, role);
+    if (roleError) return interaction.reply({ content: roleError, ephemeral: true });
+
+    const assignError = await member.roles.add(role, "Staff application approved").then(() => null).catch((error) => error);
+    if (assignError) return interaction.reply({ content: `I could not give the Trial Moderator role: ${assignError.message}`, ephemeral: true });
+
+    status = "Approved";
+    dmText = `Your staff application for ${interaction.guild.name} was approved. Welcome to the team.`;
   }
 
   if (action === "decline") {
@@ -2557,6 +2642,13 @@ function buildStaffAppReviewRow(userId, appId) {
 
 async function handleTicketButton(interaction) {
   const type = interaction.customId.split(":")[1];
+  if (!TICKET_TYPES[type]) {
+    return interaction.reply({ content: "That ticket option is no longer available. Please use the newest ticket panel.", ephemeral: true });
+  }
+  if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    return interaction.reply({ content: "I need Manage Channels permission to create tickets.", ephemeral: true });
+  }
+
   const data = getGuildData(interaction.guild.id);
   const existing = Object.entries(data.tickets).find(([key, channelId]) => key.startsWith(`${interaction.user.id}:`) && interaction.guild.channels.cache.has(channelId));
   if (existing) return interaction.reply({ content: `You already have an open ticket: <#${existing[1]}>`, ephemeral: true });
@@ -2602,9 +2694,15 @@ async function handleTicketButton(interaction) {
 }
 
 async function closeTicket(interaction) {
-  if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can close tickets.", ephemeral: true });
-  await saveTicketTranscript(interaction.channel, interaction.user, "closed");
-  await interaction.channel.permissionOverwrites.edit(interaction.customId.split(":")[1], { SendMessages: false }).catch(() => {});
+  if (!canManageTicket(interaction.member, interaction.channel)) {
+    return interaction.reply({ content: "Only staff or a configured ticket role can close tickets.", ephemeral: true });
+  }
+  const meta = getTicketMetaForChannel(interaction.guild.id, interaction.channel.id);
+  if (!meta) return interaction.reply({ content: "This ticket is not registered in storage.", ephemeral: true });
+  if (meta.closedAt) return interaction.reply({ content: "This ticket is already closed.", ephemeral: true });
+
+  const transcriptSaved = await saveTicketTranscript(interaction.channel, interaction.user, "closed");
+  await lockTicketParticipants(interaction.channel, meta, interaction.user.id);
   const data = getGuildData(interaction.guild.id);
   data.ticketMeta ||= {};
   if (data.ticketMeta[interaction.channel.id]) data.ticketMeta[interaction.channel.id].closedAt = Date.now();
@@ -2614,12 +2712,29 @@ async function closeTicket(interaction) {
     new ButtonBuilder().setCustomId(`tickettranscript:${interaction.customId.split(":")[1]}:closed`).setLabel("Send Transcript").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`ticketdelete:${interaction.customId.split(":")[1]}:closed`).setLabel("Delete Ticket").setStyle(ButtonStyle.Danger)
   );
-  await interaction.reply({ content: "Ticket closed. A transcript was sent to transcript logs.", components: [row] });
+  await interaction.reply({
+    content: transcriptSaved
+      ? "Ticket closed. A transcript was sent to transcript logs."
+      : "Ticket closed, but I could not send the transcript. Check my access to #transcript-logs.",
+    components: [row]
+  });
 }
 
 async function deleteTicket(interaction) {
-  if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can delete tickets.", ephemeral: true });
-  await saveTicketTranscript(interaction.channel, interaction.user, "deleted");
+  if (!canManageTicket(interaction.member, interaction.channel)) {
+    return interaction.reply({ content: "Only staff or a configured ticket role can delete tickets.", ephemeral: true });
+  }
+  if (!getTicketMetaForChannel(interaction.guild.id, interaction.channel.id)) {
+    return interaction.reply({ content: "This ticket is not registered in storage.", ephemeral: true });
+  }
+
+  const transcriptSaved = await saveTicketTranscript(interaction.channel, interaction.user, "deleted");
+  if (!transcriptSaved) {
+    return interaction.reply({
+      content: "I did not delete the ticket because its transcript could not be saved. Check my access to #transcript-logs and try again.",
+      ephemeral: true
+    });
+  }
   const data = getGuildData(interaction.guild.id);
   data.ticketMeta ||= {};
   delete data.ticketMeta[interaction.channel.id];
@@ -2633,9 +2748,10 @@ async function deleteTicket(interaction) {
 }
 
 async function handleClaimTicket(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can claim tickets.");
+  if (!canManageTicket(message.member, message.channel)) return message.reply("Only staff or a configured ticket role can claim tickets.");
   const meta = getTicketMetaForChannel(message.guild.id, message.channel.id);
   if (!meta) return message.reply("This command only works inside a ticket channel.");
+  if (meta.closedAt) return message.reply("This ticket is already closed.");
   if (meta.claimedBy) return message.reply(`This ticket is already claimed by <@${meta.claimedBy}>.`);
 
   const data = getGuildData(message.guild.id);
@@ -2647,10 +2763,12 @@ async function handleClaimTicket(message) {
 }
 
 async function handleTicketAdd(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can add people to tickets.");
+  if (!canManageTicket(message.member, message.channel)) return message.reply("Only staff or a configured ticket role can add people to tickets.");
   const member = message.mentions.members.first();
   if (!member) return message.reply("Usage: `!addinticket @user`");
-  if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
+  const meta = getTicketMetaForChannel(message.guild.id, message.channel.id);
+  if (!meta) return message.reply("This command only works inside a ticket channel.");
+  if (meta.closedAt) return message.reply("This ticket is already closed.");
 
   await message.channel.permissionOverwrites.edit(member.id, {
     ViewChannel: true,
@@ -2661,30 +2779,47 @@ async function handleTicketAdd(message) {
 }
 
 async function handleTicketRemove(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can remove people from tickets.");
+  if (!canManageTicket(message.member, message.channel)) return message.reply("Only staff or a configured ticket role can remove people from tickets.");
   const member = message.mentions.members.first();
   if (!member) return message.reply("Usage: `!removefromticket @user`");
-  if (!getTicketMetaForChannel(message.guild.id, message.channel.id)) return message.reply("This command only works inside a ticket channel.");
+  const meta = getTicketMetaForChannel(message.guild.id, message.channel.id);
+  if (!meta) return message.reply("This command only works inside a ticket channel.");
+  if (meta.closedAt) return message.reply("This ticket is already closed.");
+  if (member.id === meta.ownerId) return message.reply("You cannot remove the ticket owner from their own ticket.");
+  if (member.id === message.guild.members.me.id) return message.reply("You cannot remove the bot from a ticket.");
 
   await message.channel.permissionOverwrites.delete(member.id).catch(() => {});
   await message.channel.send(`${member} was removed from this ticket by ${message.author}.`);
 }
 
 async function handleTicketTranscript(interaction) {
-  if (!isStaff(interaction.member)) return interaction.reply({ content: "Only staff can send ticket transcripts.", ephemeral: true });
-  await saveTicketTranscript(interaction.channel, interaction.user, "manual transcript");
-  await interaction.reply({ content: "Transcript sent to transcript logs.", ephemeral: true });
+  if (!canManageTicket(interaction.member, interaction.channel)) {
+    return interaction.reply({ content: "Only staff or a configured ticket role can send transcripts.", ephemeral: true });
+  }
+  if (!getTicketMetaForChannel(interaction.guild.id, interaction.channel.id)) {
+    return interaction.reply({ content: "This ticket is not registered in storage.", ephemeral: true });
+  }
+  const saved = await saveTicketTranscript(interaction.channel, interaction.user, "manual transcript");
+  await interaction.reply({
+    content: saved ? "Transcript sent to transcript logs." : "I could not send the transcript. Check my access to #transcript-logs.",
+    ephemeral: true
+  });
 }
 
 async function hideClaimedTicketFromOtherMods(channel, claimerMember, ownerId) {
   const guild = channel.guild;
   const keepVisible = new Set([ownerId, claimerMember.id, guild.members.me.id]);
+  const meta = getTicketMetaForChannel(guild.id, channel.id);
+  const rolesToHide = new Map(getStaffRoleObjects(guild).map((role) => [role.id, role]));
 
-  for (const roleName of STAFF_ROLES) {
-    const role = findRole(guild, roleName);
-    if (!role) continue;
+  if (meta?.type === "cc") {
+    for (const role of [...getConfiguredCcTicketViewerRoles(guild), ...getConfiguredCcReviewerRoles(guild)]) {
+      rolesToHide.set(role.id, role);
+    }
+  }
 
-    if ([ROLE_NAMES.owner, ROLE_NAMES.admin].includes(roleName)) {
+  for (const role of rolesToHide.values()) {
+    if ([ROLE_NAMES.owner, ROLE_NAMES.admin].includes(role.name) || role.permissions.has(PermissionFlagsBits.Administrator)) {
       await channel.permissionOverwrites.edit(role.id, {
         ViewChannel: true,
         SendMessages: true,
@@ -2706,10 +2841,28 @@ async function hideClaimedTicketFromOtherMods(channel, claimerMember, ownerId) {
   }
 }
 
-async function handleStaffStats(message) {
+async function lockTicketParticipants(channel, meta, actingUserId) {
+  const keepSending = new Set([
+    channel.guild.members.me.id,
+    actingUserId,
+    meta.claimedBy
+  ].filter(Boolean));
+
+  for (const overwrite of channel.permissionOverwrites.cache.values()) {
+    if (channel.guild.roles.cache.has(overwrite.id) || keepSending.has(overwrite.id)) continue;
+    await channel.permissionOverwrites.edit(overwrite.id, { SendMessages: false }).catch(() => {});
+  }
+}
+
+async function handleStaffStats(message, args = []) {
   if (!isStaff(message.member)) return message.reply("Only staff can view staff stats.");
-  const target = message.mentions.users.first() || message.author;
-  const stats = getGuildData(message.guild.id).staffStats?.[target.id] || {};
+  const target = await resolveUserArgument(message, args[0]) || message.author;
+  const data = getGuildData(message.guild.id);
+  const stats = data.staffStats?.[target.id] || {};
+  const staffLogCases = (data.cases || []).filter((entry) => entry.type === "Staff Log" && entry.moderatorId === target.id);
+  const approved = staffLogCases.filter((entry) => (data.staffLogVotes?.[entry.id]?.up || []).length > 0).length;
+  const declined = staffLogCases.filter((entry) => (data.staffLogVotes?.[entry.id]?.down || []).length > 0).length;
+  const starred = staffLogCases.filter((entry) => (data.staffLogVotes?.[entry.id]?.star || []).length > 0).length;
 
   await message.reply({
     embeds: [
@@ -2719,6 +2872,9 @@ async function handleStaffStats(message) {
           field("Closed Tickets", stats.closedTickets || 0, true),
           field("Deleted Tickets", stats.deletedTickets || 0, true),
           field("Staff Logs", stats.logs || 0, true),
+          field("Approved Logs", approved, true),
+          field("Declined Logs", declined, true),
+          field("Starred Logs", starred, true),
           field("Punishments", stats.punishments || 0, true)
         )
     ]
@@ -2730,11 +2886,10 @@ function getTicketMetaForChannel(guildId, channelId) {
 }
 
 async function saveTicketTranscript(channel, staffUser, action) {
-  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!messages) return;
+  const messages = await fetchTicketTranscriptMessages(channel);
+  if (!messages) return false;
 
-  const lines = [...messages.values()]
-    .reverse()
+  const lines = messages
     .map((message) => `[${message.createdAt.toISOString()}] ${message.author.tag}: ${message.content || "[no text content]"}${message.attachments.size ? ` Attachments: ${message.attachments.map((attachment) => attachment.url).join(", ")}` : ""}`);
   const transcript = [
     `Transcript for #${channel.name}`,
@@ -2749,12 +2904,32 @@ async function saveTicketTranscript(channel, staffUser, action) {
   });
   const logChannel = await ensureTranscriptLogChannel(channel.guild) || findChannel(channel.guild, "logs") || findChannel(channel.guild, "mod-logs");
 
-  if (logChannel) {
-    await logChannel.send({
-      embeds: [baseEmbed("Ticket Transcript").addFields(field("Ticket", `${channel.name}`, true), field("Action", action, true), field("Staff", staffUser.tag, true))],
-      files: [attachment]
-    }).catch(() => {});
+  if (!logChannel) return false;
+
+  return Boolean(await logChannel.send({
+    embeds: [baseEmbed("Ticket Transcript").addFields(field("Ticket", `${channel.name}`, true), field("Action", action, true), field("Staff", staffUser.tag, true))],
+    files: [attachment]
+  }).catch(() => null));
+}
+
+async function fetchTicketTranscriptMessages(channel, limit = 1000) {
+  const messages = [];
+  let before;
+
+  while (messages.length < limit) {
+    const batch = await channel.messages.fetch({
+      limit: Math.min(100, limit - messages.length),
+      ...(before ? { before } : {})
+    }).catch(() => null);
+
+    if (!batch) return null;
+    if (!batch.size) break;
+    messages.push(...batch.values());
+    before = batch.last()?.id;
+    if (batch.size < 100) break;
   }
+
+  return messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 }
 
 async function ensureTranscriptLogChannel(guild) {
@@ -2815,7 +2990,7 @@ async function handleBugReport(message) {
 }
 
 async function handleEvent(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can create events.");
+  if (!isModerator(message.member)) return message.reply("Only Moderator+ can create events.");
   const title = await ask(message, "Event title?");
   if (!title) return;
   const description = await ask(message, "Event description?");
@@ -2840,7 +3015,7 @@ async function handleEvent(message) {
 }
 
 async function handleEndEvent(message) {
-  if (!isStaff(message.member)) return message.reply("Only staff can end events.");
+  if (!isModerator(message.member)) return message.reply("Only Moderator+ can end events.");
   const data = getGuildData(message.guild.id);
   const active = Object.entries(data.events).find(([, event]) => !event.ended);
   if (!active) return message.reply("No active event found.");
@@ -3115,7 +3290,6 @@ async function handleWarn(message, args) {
     reason
   });
   data.warnings[user.id].push({ caseId, reason, moderatorId: message.author.id, at: Date.now() });
-  data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
   await user.send(`You were warned in ${message.guild.name}: ${reason}`).catch(() => {});
   await logModeration(message.guild, "Warn", user, message.author, `${reason} | Case #${caseId}`);
@@ -3134,6 +3308,9 @@ async function handleUnwarn(message, args) {
 
   const user = await resolveUserArgument(message, args[0]);
   if (!user) return message.reply("Usage: `!unwarn @user-or-id [warning number/case id] [reason]`");
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "remove warnings from");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   const data = getGuildData(message.guild.id);
   const warnings = data.warnings[user.id] || [];
@@ -3194,7 +3371,8 @@ async function handlePunish(message, args) {
   data.punishments ||= {};
   const record = data.punishments[user.id] ||= { history: [], counts: {} };
   const nextCount = (record.counts[ruleKey] || 0) + 1;
-  const punishment = limitPunishmentForMember(determinePunishment(ruleKey, nextCount, severe), message.member);
+  let punishment = limitPunishmentForMember(determinePunishment(ruleKey, nextCount, severe), message.member);
+  if (!member && punishment.action === "timeout") punishment = { action: "warn" };
   const reason = rawReason || PUNISHMENT_RULES[ruleKey].label;
   const evidence = referencedMessage?.content || "No replied message content.";
 
@@ -3227,9 +3405,19 @@ async function handlePunish(message, args) {
   data.analytics.punishments += 1;
   saveGuildData(message.guild.id, data);
 
-  await applyPunishmentAction(message.guild, user, member, punishment, reason, message.author);
+  const actionError = await applyPunishmentAction(message.guild, user, member, punishment, reason, message.author)
+    .then(() => null)
+    .catch((error) => error);
+  if (actionError) {
+    const caseEntry = data.cases.find((entry) => entry.id === caseId);
+    if (caseEntry) caseEntry.details = `${caseEntry.details}; action failed: ${actionError.message}`;
+    saveGuildData(message.guild.id, data);
+  }
   await logPunishment(message.guild, user, message.author, ruleKey, punishment, reason, evidence, deleted, nextCount, caseId);
-  await message.reply(`Punishment applied to **${user.tag}**: **${formatPunishment(punishment)}** for **${PUNISHMENT_RULES[ruleKey].label}**. Case #${caseId}.`);
+  await message.reply(actionError
+    ? `Case #${caseId} was saved, but I could not apply **${formatPunishment(punishment)}**: ${actionError.message}`
+    : `Punishment applied to **${user.tag}**: **${formatPunishment(punishment)}** for **${PUNISHMENT_RULES[ruleKey].label}**. Case #${caseId}.`
+  );
 }
 
 async function handleStaffLog(message) {
@@ -3407,6 +3595,9 @@ async function handleRemoveCase(message, args) {
   const user = await resolveUserArgument(message, args[0]);
   const caseId = Number(String(args[1] || "").replace("#", ""));
   if (!user || !caseId || Number.isNaN(caseId)) return message.reply("Usage: `!removecase @user-or-id caseNumber`");
+  const member = await message.guild.members.fetch(user.id).catch(() => null);
+  const targetCheck = canModerateTarget(message.member, member, "remove cases from");
+  if (!targetCheck.ok) return message.reply(targetCheck.reason);
 
   const data = getGuildData(message.guild.id);
   data.cases ||= [];
@@ -3443,18 +3634,26 @@ async function handleManualTempBan(message, args) {
   if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can tempban users.");
 
   const user = await resolveUserArgument(message, args[0]);
-  const days = Number(args[1] || 14);
-  const reason = args.slice(2).join(" ") || "Manual temporary ban";
+  const duration = parseTempBanDuration(args.slice(1));
+  const reason = duration
+    ? args.slice(1 + duration.consumed).join(" ") || "Manual temporary ban"
+    : "Manual temporary ban";
 
-  if (!user || Number.isNaN(days) || days < 1) {
-    await message.reply("Usage: `!tempban @user-or-id days reason`");
+  if (!user || !duration) {
+    await message.reply("Usage: `!tempban @user-or-id 30m reason`, `!tempban @user-or-id 12h reason`, or `!tempban @user-or-id 14d reason`. A plain number still means days.");
     return;
   }
   const member = await message.guild.members.fetch(user.id).catch(() => null);
   const targetCheck = canModerateTarget(message.member, member, "tempban");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
+  const botError = getBotModerationError(message.guild, member, PermissionFlagsBits.BanMembers, "ban", "bannable");
+  if (botError) return message.reply(botError);
 
-  await applyTempBan(message.guild, user, days, reason, message.author);
+  const actionError = await applyTempBan(message.guild, user, duration, reason, message.author)
+    .then(() => null)
+    .catch((error) => error);
+  if (actionError) return message.reply(`I could not apply that temporary ban: ${actionError.message}`);
+
   const data = getGuildData(message.guild.id);
   const caseId = addCase(data, {
     type: "Tempban",
@@ -3463,36 +3662,53 @@ async function handleManualTempBan(message, args) {
     moderatorId: message.author.id,
     moderatorTag: message.author.tag,
     reason,
-    details: `${days} day(s)`
+    details: duration.label
   });
+  data.analytics.punishments += 1;
+  const staff = data.staffStats[message.author.id] ||= {};
+  staff.punishments = (staff.punishments || 0) + 1;
   saveGuildData(message.guild.id, data);
-  await message.reply(`Temporarily banned **${user.tag}** for **${days} day(s)**.`);
+  await message.reply(`Temporarily banned **${user.tag}** for **${duration.label}**. Case #${caseId}.`);
 }
 
 async function handleUnTempBan(message, args) {
   if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can remove tempbans.");
 
-  const userId = message.mentions.users.first()?.id || args[0];
+  const userId = message.mentions.users.first()?.id || cleanUserId(args[0]);
   if (!userId) {
     await message.reply("Usage: `!untempban @user` or `!untempban userId`");
     return;
   }
 
+  if (!message.guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+    return message.reply("I need the **Ban Members** permission to remove a temporary ban.");
+  }
+
   const data = getGuildData(message.guild.id);
   data.tempBans ||= {};
+  const record = data.tempBans[userId] || null;
+  const banLookup = await fetchGuildBan(message.guild, userId)
+    .then((ban) => ({ ban, error: null }))
+    .catch((error) => ({ ban: null, error }));
+  if (banLookup.error) return message.reply(`I could not check that temporary ban: ${banLookup.error.message}`);
+  const existingBan = banLookup.ban;
+  const unbanError = existingBan
+    ? await message.guild.members.unban(userId, `Tempban removed by ${message.author.tag}`).then(() => null).catch((error) => error)
+    : null;
+  if (unbanError) return message.reply(`I could not remove that temporary ban: ${unbanError.message}`);
+
   delete data.tempBans[userId];
   const caseId = addCase(data, {
     type: "Untempban",
     userId,
-    userTag: userId,
+    userTag: record?.userTag || existingBan?.user?.tag || userId,
     moderatorId: message.author.id,
     moderatorTag: message.author.tag,
     reason: "Temporary ban removed"
   });
   saveGuildData(message.guild.id, data);
-  await message.guild.members.unban(userId, `Tempban removed by ${message.author.tag}`).catch(() => {});
   await logTo(message.guild, "mod-logs", "Tempban Removed", [field("User ID", userId), field("Moderator", message.author.tag), field("Case", `#${caseId}`)]);
-  await message.reply(`Tempban removed if that user was banned. Case #${caseId}.`);
+  await message.reply(`${existingBan ? "Tempban removed" : "No active Discord ban was found; any stale tempban record was cleared"}. Case #${caseId}.`);
 }
 
 async function handleKick(message, args) {
@@ -3501,8 +3717,11 @@ async function handleKick(message, args) {
   if (!member) return message.reply("Usage: `!kick @user-or-id reason`");
   const targetCheck = canModerateTarget(message.member, member, "kick");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
+  const botError = getBotModerationError(message.guild, member, PermissionFlagsBits.KickMembers, "kick", "kickable");
+  if (botError) return message.reply(botError);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await member.send(`You were kicked from ${message.guild.name}: ${reason}`).catch(() => {});
+  markBotModerationAction(message.guild.id, "kick", member.id);
   await member.kick(reason);
   await logModeration(message.guild, "Kick", member.user, message.author, reason);
   await message.reply(`Kicked ${member.user.tag}.`);
@@ -3515,8 +3734,11 @@ async function handleBan(message, args) {
   const member = await message.guild.members.fetch(user.id).catch(() => null);
   const targetCheck = canModerateTarget(message.member, member, "ban");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
+  const botError = getBotModerationError(message.guild, member, PermissionFlagsBits.BanMembers, "ban", "bannable");
+  if (botError) return message.reply(botError);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await user.send(banDmText(message.guild, reason)).catch(() => {});
+  markBotModerationAction(message.guild.id, "ban", user.id);
   await message.guild.members.ban(user.id, { reason });
   await logModeration(message.guild, "Ban", user, message.author, reason);
   await message.reply(`Banned ${user.tag}.`);
@@ -3531,6 +3753,8 @@ async function handleTimeout(message, args) {
   }
   const targetCheck = canModerateTarget(message.member, member, "timeout");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
+  const botError = getBotModerationError(message.guild, member, PermissionFlagsBits.ModerateMembers, "timeout", "moderatable");
+  if (botError) return message.reply(botError);
 
   const reason = args.slice(1 + duration.consumed).join(" ") || "No reason provided";
   await member.timeout(duration.ms, `${duration.label} - ${reason}`);
@@ -3541,8 +3765,11 @@ async function handleTimeout(message, args) {
 async function handleUnban(message, args) {
   if (!canBan(message.member)) return message.reply("Only Moderator+ with Ban Members can unban users.");
   const user = await resolveUserArgument(message, args[0]);
-  const userId = user?.id || args[0];
+  const userId = user?.id || cleanUserId(args[0]);
   if (!userId) return message.reply("Usage: `!unban userId reason`");
+  if (!message.guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+    return message.reply("I need the **Ban Members** permission to unban users.");
+  }
   const reason = args.slice(1).join(" ") || "No reason provided";
   await message.guild.members.unban(userId, `${reason} - ${message.author.tag}`);
   const data = getGuildData(message.guild.id);
@@ -3565,6 +3792,8 @@ async function handleUntimeout(message, args) {
   if (!member) return message.reply("Usage: `!untimeout @user-or-id reason`");
   const targetCheck = canModerateTarget(message.member, member, "untimeout");
   if (!targetCheck.ok) return message.reply(targetCheck.reason);
+  const botError = getBotModerationError(message.guild, member, PermissionFlagsBits.ModerateMembers, "remove timeouts from", "moderatable");
+  if (botError) return message.reply(botError);
   const reason = args.slice(1).join(" ") || "No reason provided";
   await member.timeout(null, `${reason} - ${message.author.tag}`);
   const data = getGuildData(message.guild.id);
@@ -3619,6 +3848,17 @@ async function resolveMemberArgument(message, value) {
   const userId = cleanUserId(value);
   if (!userId) return null;
   return message.guild.members.fetch(userId).catch(() => null);
+}
+
+function getBotModerationError(guild, member, permission, action, capability) {
+  const botMember = guild.members.me;
+  if (!botMember?.permissions.has(permission)) {
+    return `I need the required Discord permission to ${action} members. Check my bot role permissions.`;
+  }
+  if (member && capability && member[capability] === false) {
+    return `I cannot ${action} that member. Move my bot role above their highest role and check my permissions.`;
+  }
+  return null;
 }
 
 function cleanUserId(value = "") {
@@ -3822,6 +4062,30 @@ function parseTimeoutDuration(args = [], maxMs = 28 * DAY_MS) {
   };
 }
 
+function parseTempBanDuration(args = []) {
+  const first = String(args[0] || "").trim().toLowerCase();
+  if (!first) return null;
+
+  const separatedUnit = String(args[1] || "").trim().toLowerCase();
+  if (/^\d+(?:\.\d+)?$/.test(first) && /^(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/.test(separatedUnit)) {
+    return parseTimeoutDuration(args, 365 * DAY_MS);
+  }
+
+  // Keep the original beginner-friendly behavior: a plain number means days.
+  if (/^\d+(?:\.\d+)?$/.test(first)) {
+    const days = Number(first);
+    const ms = days * DAY_MS;
+    if (!days || ms > 365 * DAY_MS) return null;
+    return {
+      ms,
+      label: `${days} ${days === 1 ? "day" : "days"}`,
+      consumed: 1
+    };
+  }
+
+  return parseTimeoutDuration(args, 365 * DAY_MS);
+}
+
 async function fetchReferencedMessage(message) {
   if (!message.reference?.messageId) return null;
   return message.channel.messages.fetch(message.reference.messageId).catch(() => null);
@@ -3839,7 +4103,9 @@ async function applyPunishmentAction(guild, user, member, punishment, reason, mo
   }
 
   if (punishment.action === "timeout") {
-    if (!member) return;
+    if (!member) throw new Error("That user is not currently in the server, so they cannot be timed out.");
+    const botError = getBotModerationError(guild, member, PermissionFlagsBits.ModerateMembers, "timeout", "moderatable");
+    if (botError) throw new Error(botError);
     const duration = punishmentDurationMs(punishment);
     await user.send(`You were muted in ${guild.name} for ${formatPunishment(punishment)}: ${reason}`).catch(() => {});
     await member.timeout(duration, `${reason} - ${moderator.tag}`);
@@ -3852,33 +4118,68 @@ async function applyPunishmentAction(guild, user, member, punishment, reason, mo
   }
 
   if (punishment.action === "ban") {
+    const botError = getBotModerationError(guild, member, PermissionFlagsBits.BanMembers, "ban", "bannable");
+    if (botError) throw new Error(botError);
     await user.send(banDmText(guild, reason)).catch(() => {});
+    markBotModerationAction(guild.id, "ban", user.id);
     await guild.members.ban(user.id, { reason: `${reason} - ${moderator.tag}` });
   }
 }
 
-async function applyTempBan(guild, user, days, reason, moderator) {
+async function applyTempBan(guild, user, durationInput, reason, moderator) {
+  const duration = typeof durationInput === "number"
+    ? { ms: durationInput * DAY_MS, label: `${durationInput} ${durationInput === 1 ? "day" : "days"}` }
+    : durationInput;
+
+  if (!duration?.ms || duration.ms <= 0) throw new Error("Invalid temporary ban duration.");
+  if (!guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+    throw new Error("The bot needs Ban Members permission to apply temporary bans.");
+  }
+
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (member && !member.bannable) {
+    throw new Error("The bot role must be above the target member's highest role.");
+  }
+
+  const existingBan = await fetchGuildBan(guild, user.id);
+  if (existingBan) throw new Error("That user is already banned from this server.");
+
+  const createdAt = Date.now();
+  const expiresAt = createdAt + duration.ms;
+  await user.send(banDmText(guild, reason, duration.label)).catch(() => {});
+  markBotModerationAction(guild.id, "ban", user.id);
+  await guild.members.ban(user.id, { reason: `${reason} - tempban ${duration.label} - ${moderator.tag}` });
+
+  // Save only after Discord confirms the ban so failed actions never become
+  // permanent stale records that later commands mistake for active tempbans.
   const data = getGuildData(guild.id);
-  data.tempBans ||= {};
   data.tempBans[user.id] = {
     userId: user.id,
     userTag: user.tag,
     reason,
     moderatorId: moderator.id,
-    expiresAt: Date.now() + days * DAY_MS,
-    createdAt: Date.now()
+    duration: duration.label,
+    expiresAt,
+    createdAt
   };
   saveGuildData(guild.id, data);
 
-  await user.send(banDmText(guild, reason, `${days} day(s)`)).catch(() => {});
-  await guild.members.ban(user.id, { reason: `${reason} - tempban ${days}d - ${moderator.tag}` });
   await logTo(guild, "mod-logs", "Temporary Ban", [
     field("User", `${user.tag} (${user.id})`),
     field("Moderator", moderator.tag),
-    field("Duration", `${days} day(s)`, true),
-    field("Expires", `<t:${Math.floor((Date.now() + days * DAY_MS) / 1000)}:F>`, true),
+    field("Duration", duration.label, true),
+    field("Expires", `<t:${Math.floor(expiresAt / 1000)}:F>`, true),
     field("Reason", reason)
   ]);
+}
+
+async function fetchGuildBan(guild, userId) {
+  try {
+    return await guild.bans.fetch(userId);
+  } catch (error) {
+    if (Number(error?.code) === 10026) return null;
+    throw error;
+  }
 }
 
 async function checkExpiredTempBans() {
@@ -3888,15 +4189,26 @@ async function checkExpiredTempBans() {
     let changed = false;
 
     for (const [userId, tempBan] of Object.entries(data.tempBans)) {
-      if (Date.now() < tempBan.expiresAt) continue;
+      const expiresAt = Number(tempBan.expiresAt);
+      if (!Number.isFinite(expiresAt) || Date.now() < expiresAt) continue;
 
-      await guild.members.unban(userId, "Temporary ban expired").catch(() => {});
-      await logTo(guild, "mod-logs", "Temporary Ban Expired", [
-        field("User", `${tempBan.userTag || userId}`),
-        field("Reason", tempBan.reason)
-      ]);
-      delete data.tempBans[userId];
-      changed = true;
+      try {
+        const existingBan = await fetchGuildBan(guild, userId);
+        if (existingBan) await guild.members.unban(userId, "Temporary ban expired");
+        await logTo(guild, "mod-logs", "Temporary Ban Expired", [
+          field("User", `${tempBan.userTag || userId}`),
+          field("Reason", tempBan.reason || "No reason provided")
+        ]);
+        delete data.tempBans[userId];
+        changed = true;
+      } catch (error) {
+        console.error(`Could not expire tempban for ${userId} in ${guild.id}:`, error);
+        await logTo(guild, "mod-logs", "Temporary Ban Expiration Failed", [
+          field("User", `${tempBan.userTag || userId}`),
+          field("Error", error.message),
+          field("Retry", "The bot kept this record and will retry automatically.")
+        ]);
+      }
     }
 
     if (changed) saveGuildData(guild.id, data);
@@ -3938,6 +4250,7 @@ async function handleBackup(message) {
 
 async function handleRestoreBackup(message, args) {
   if (!isAdmin(message.member)) return message.reply("Only admins can use `!restorebackup`.");
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const backups = fs.readdirSync(BACKUP_DIR).filter((file) => file.startsWith(`${message.guild.id}-`)).sort();
   const fileName = args[0] || backups.at(-1);
   if (!fileName || !backups.includes(fileName)) return message.reply("Backup not found.");
@@ -3994,7 +4307,8 @@ async function collectOneMessage(channel, userId, timeout = QUESTION_TIMEOUT) {
 }
 
 async function askDmQuestion(dm, userId, question, timeout) {
-  await dm.send(question).catch(() => null);
+  const sent = await dm.send(question).catch(() => null);
+  if (!sent) return null;
   const reply = await collectOneMessage(dm, userId, timeout);
   return reply?.content?.trim() || null;
 }
@@ -4209,9 +4523,18 @@ function list(items) {
   return items.length ? items.slice(0, 20).join("\n").slice(0, 1024) : "None";
 }
 
-if (!TOKEN) {
-  console.error("Missing DISCORD_TOKEN in .env or host environment variables.");
-  process.exit(1);
+if (require.main === module) {
+  if (!TOKEN) {
+    console.error("Missing DISCORD_TOKEN in .env or host environment variables.");
+    process.exit(1);
+  }
+
+  client.login(TOKEN);
 }
 
-client.login(TOKEN);
+module.exports = {
+  BAN_APPEAL_INVITE,
+  cleanUserId,
+  parseTempBanDuration,
+  parseTimeoutDuration
+};
