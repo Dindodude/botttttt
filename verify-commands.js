@@ -52,6 +52,14 @@ for (const customId of requiredButtons) {
 if (!source.includes("https://discord.gg/WQ4U3ARjue")) failures.push("Ban appeal invite is not current.");
 if (source.includes("https://discord.gg/Zv7uGG3SYj")) failures.push("Old ban appeal invite is still present.");
 
+const ccCommandSection = source.match(/async function handleCcConfig[\s\S]*?function buildCcPanelEmbed/)?.[0] || "";
+if (/<@&\$\{/.test(ccCommandSection) || /\$\{(?:role|targetRole)\}/.test(ccCommandSection)) {
+  failures.push("Content Creator command replies contain a role mention.");
+}
+if (!ccCommandSection.includes("allowedMentions: { parse: []")) {
+  failures.push("Content Creator command replies do not explicitly disable mentions.");
+}
+
 if (failures.length) {
   console.error("Command verification failed:");
   for (const failure of failures) console.error(`- ${failure}`);

@@ -2018,6 +2018,13 @@ async function handleCcPanel(message) {
   await message.reply("Content Creator application panel posted.");
 }
 
+function replyWithoutMentions(message, content) {
+  return message.reply({
+    content,
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+}
+
 async function handleCcConfig(message, args) {
   if (!isAdmin(message.member)) return message.reply("Only admins can use `!ccconfig`.");
 
@@ -2032,14 +2039,15 @@ async function handleCcConfig(message, args) {
       embeds: [
         baseEmbed("Content Creator Configuration")
           .addFields(
-            field("CC Role", role ? `<@&${role.id}>` : "Not set. Use `!ccconfig role @Content Creator`."),
-            field("Who Can Approve/Deny", reviewerRoles.length ? reviewerRoles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ") : "Admins only"),
-            field("Who Can See CC Tickets", ticketViewerRoles.length ? ticketViewerRoles.map((viewerRole) => `<@&${viewerRole.id}>`).join(", ") : "No roles set. Use `!ccconfig ticketroles @role`."),
+            field("CC Role", role ? role.name : "Not set. Use `!ccconfig role @Content Creator`."),
+            field("Who Can Approve/Deny", reviewerRoles.length ? reviewerRoles.map((reviewerRole) => reviewerRole.name).join(", ") : "Admins only"),
+            field("Who Can See CC Tickets", ticketViewerRoles.length ? ticketViewerRoles.map((viewerRole) => viewerRole.name).join(", ") : "No roles set. Use `!ccconfig ticketroles @role`."),
             field("Approve Message", settings.ccApproveMessage || "Default approval message"),
             field("Deny Message", settings.ccDenyMessage || "Default denial message"),
             field("Commands", "`!ccconfig role @role`, `!ccconfig reviewers @role @role2`, `!ccconfig ticketroles @role @role2`, `!ccconfig clearreviewers`, `!ccconfig clearticketroles`, `!ccconfig approvemessage text`, `!ccconfig denymessage text`, `!ccconfig resetmessages`")
           )
-      ]
+      ],
+      allowedMentions: { parse: [], repliedUser: false }
     });
   }
 
@@ -2051,7 +2059,7 @@ async function handleCcConfig(message, args) {
     if (roleError) return message.reply(roleError);
 
     saveGuildSettings(message.guild.id, { ...settings, ccRoleId: targetRole.id });
-    return message.reply(`Content Creator approval role set to ${targetRole}.`);
+    return replyWithoutMentions(message, `Content Creator approval role set to ${targetRole.name}.`);
   }
 
   if (["reviewers", "approvers", "allowed"].includes(action)) {
@@ -2060,7 +2068,7 @@ async function handleCcConfig(message, args) {
 
     saveGuildSettings(message.guild.id, { ...settings, ccReviewerRoleIds: roles.map((reviewerRole) => reviewerRole.id) });
     const synced = await syncCcTicketViewerPermissions(message.guild);
-    return message.reply(`CC approver roles updated: ${roles.map((reviewerRole) => `<@&${reviewerRole.id}>`).join(", ")}. Synced ${synced} open CC ticket(s).`);
+    return replyWithoutMentions(message, `CC approver roles updated: ${roles.map((reviewerRole) => reviewerRole.name).join(", ")}. Synced ${synced} open CC ticket(s).`);
   }
 
   if (["ticketroles", "viewers", "visibility", "ticketviewers"].includes(action)) {
@@ -2069,7 +2077,7 @@ async function handleCcConfig(message, args) {
 
     saveGuildSettings(message.guild.id, { ...settings, ccTicketViewerRoleIds: roles.map((viewerRole) => viewerRole.id) });
     const synced = await syncCcTicketViewerPermissions(message.guild);
-    return message.reply(`CC ticket visibility updated. Only the applicant, bot, and these roles will see CC tickets: ${roles.map((viewerRole) => `<@&${viewerRole.id}>`).join(", ")}. Synced ${synced} open CC ticket(s).`);
+    return replyWithoutMentions(message, `CC ticket visibility updated. Only the applicant, bot, and these roles will see CC tickets: ${roles.map((viewerRole) => viewerRole.name).join(", ")}. Synced ${synced} open CC ticket(s).`);
   }
 
   if (["clearreviewers", "clearapprovers"].includes(action)) {
@@ -2186,7 +2194,10 @@ async function handleCcApprove(message, args) {
   markCcTicketReviewed(message.guild.id, message.channel.id, "Approved", message.author.id);
 
   const dmText = settings.ccApproveMessage || `Your Content Creator application in ${message.guild.name} was approved. You now have the Content Creator role.`;
-  await user.send(dmText).catch(() => message.channel.send(`${user}, your Content Creator application was approved.`).catch(() => {}));
+  await user.send(dmText).catch(() => message.channel.send({
+    content: `Content Creator application approved for ${user.tag}. Their DMs are closed.`,
+    allowedMentions: { parse: [] }
+  }).catch(() => {}));
 
   await logTo(message.guild, "logs", "CC Application Approved", [
     field("Applicant", `${user.tag} (${user.id})`),
@@ -2194,7 +2205,7 @@ async function handleCcApprove(message, args) {
     field("Role Given", role.name)
   ]);
 
-  await message.reply(`Approved ${user.tag} and gave ${role}.`);
+  await replyWithoutMentions(message, `Content Creator role given to ${user.tag}.`);
 }
 
 async function handleCcDeny(message, args) {
@@ -2214,7 +2225,10 @@ async function handleCcDeny(message, args) {
   const dmText = `${settings.ccDenyMessage || defaultText}${reason ? `\nReason: ${reason}` : ""}`;
 
   markCcTicketReviewed(message.guild.id, message.channel.id, "Denied", message.author.id);
-  await user.send(dmText).catch(() => message.channel.send(`${user}, your Content Creator application was denied. ${reason || "Unfortunately, you did not fit the requirements."}`).catch(() => {}));
+  await user.send(dmText).catch(() => message.channel.send({
+    content: `Content Creator application denied for ${user.tag}. Their DMs are closed. ${reason || "Unfortunately, they did not fit the requirements."}`,
+    allowedMentions: { parse: [] }
+  }).catch(() => {}));
 
   await logTo(message.guild, "logs", "CC Application Denied", [
     field("Applicant", `${user.tag} (${user.id})`),
@@ -2222,7 +2236,7 @@ async function handleCcDeny(message, args) {
     field("Reason", reason || "Did not fit the requirements")
   ]);
 
-  await message.reply(`Denied ${user.tag}.`);
+  await replyWithoutMentions(message, `Content Creator application denied for ${user.tag}.`);
 }
 
 function buildCcPanelEmbed(guild) {
