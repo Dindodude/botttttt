@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-07-15-command-audit-ticket-tempban";
+const BOT_VERSION = "2026-08-16-donation-leaderboard";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const BAN_APPEAL_INVITE = "https://discord.gg/WQ4U3ARjue";
@@ -88,6 +88,15 @@ const LEVEL_REWARD_ROLES = {
   10: { name: "Level 10", color: "#3b82f6" },
   20: { name: "Level 20", color: "#a855f7" }
 };
+const DONATION_ROLE_TIERS = [
+  { amount: 550, key: "550", label: "Alpha Access", perk: "Access to Alpha KR" },
+  { amount: 1000, key: "1000", label: "Supporter", perk: "Supporter role and private supporter leaks" },
+  { amount: 3500, key: "3500", label: "Super Fan", perk: "5,000 GCells on release and the Super Fan role" },
+  { amount: 10000, key: "10000", label: "Mega Fan", perk: "VIP gamepass, 2,000 GCells, another gamepass, and the Mega Fan role" },
+  { amount: 25000, key: "25000", label: "Ultimate Fan", perk: "Special credits, permanent early access, and private-server unreleased kaiju access" },
+  { amount: 35000, key: "35000", label: "Ultra Plus Fan", perk: "Three gamepasses, the Ultra Plus Fan role, and a custom server role" },
+  { amount: 50000, key: "50000", label: "Supreme Fan", perk: "Five gamepasses and the Supreme Fan role" }
+];
 
 const PLAYER_PERMS = [
   PermissionFlagsBits.ViewChannel,
@@ -268,7 +277,8 @@ const MEDIA_URL_PATTERN = /(tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.di
 const PLAYER_COMMAND_CHANNEL = "bot-commands";
 const recentBotModerationActions = new Map();
 const activeStaffApplications = new Set();
-const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "ccpanel", "ccconfig", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles"]);
+const activeDonationConfigurations = new Set();
+const ADMIN_COMMANDS = new Set(["krupdate", "newplayersetup", "rolesetup", "autorole", "automod", "badword", "commandconfigure", "logconfigure", "botconfig", "start", "starthere", "ticketpanel", "ccpanel", "ccconfig", "staffapp", "analytics", "backup", "restorebackup", "configreset", "reactionroles", "donation", "donationremove"]);
 const STAFF_COMMANDS = new Set(["staffcommands", "event", "endevent", "gcreate", "staffstats", "claimticket", "add", "addinticket", "remove", "removefromticket", "ccapprove", "ccdeny", "warn", "unwarn", "warnings", "punish", "log", "cases", "case", "removecase", "punishments", "tempban", "untempban", "kick", "ban", "unban", "timeout", "untimeout", "purge", "clear"]);
 const STAFF_APP_QUESTIONS = [
   "What is your Discord username and ID?",
@@ -304,6 +314,7 @@ client.once("ready", () => {
   rotateStatus();
   checkExpiredTempBans();
   checkGiveaways();
+  refreshDonationLeaderboards().catch((error) => console.error("Donation leaderboard startup refresh failed:", error));
   setInterval(checkExpiredTempBans, 60 * 1000).unref();
   setInterval(checkGiveaways, GIVEAWAY_CHECK_MS).unref();
 });
@@ -366,7 +377,9 @@ client.on("messageCreate", async (message) => {
     if (command === "endevent") return handleEndEvent(message);
     if (command === "gcreate") return handleGiveawayCreate(message);
     if (command === "rank" || command === "level") return handleRank(message);
-    if (command === "leaderboard") return handleLeaderboard(message);
+    if (command === "leaderboard") return handleLeaderboard(message, args);
+    if (command === "donation") return handleDonation(message, args);
+    if (command === "donationremove") return handleDonationRemove(message, args);
     if (command === "analytics") return handleAnalytics(message);
     if (command === "serverstats") return handleServerStats(message);
     if (command === "staffstats") return handleStaffStats(message, args);
@@ -410,6 +423,10 @@ client.on("guildMemberAdd", async (member) => {
   await sendJoinLog(member, "Member Joined");
   if (settings.autoRoleEnabled !== false) await assignJoinRoles(member, settings);
   else await logTo(member.guild, "join-logs", "Auto Role Skipped", [field("User", `${member}`), field("Reason", "Auto role is disabled.")]);
+  const donationTotal = Number(data.donations?.[member.id]?.total || 0);
+  if (donationTotal > 0) await syncDonationRoles(member.guild, member.id, donationTotal, settings).catch((error) => {
+    console.error("Donation role join sync failed:", error);
+  });
   await sendWelcome(member);
   await sendNewMemberDm(member);
 });
@@ -1829,7 +1846,8 @@ async function handleCommands(message) {
         .addFields(
           field("General", "`!ping`, `!version`, `!commands`, `!help`, `!rules`, `!serverstats`"),
           field("Community", "`!review`, `!suggest [idea]`, `!bugreport`"),
-          field("Levels", "`!rank`, `!level`, `!leaderboard` are disabled because Noctaly handles levels."),
+          field("Levels", "`!rank` and `!level` are disabled because Noctaly handles levels."),
+          field("Donations", "`!leaderboard` shows the Robux donation leaderboard and reward milestones."),
           field("Support", "Use the ticket panel in #tickets when you need private help."),
           field("Notes", "Staff commands are hidden from players. Staff can use `!staffcommands`.")
         )
@@ -1844,13 +1862,13 @@ async function handleStaffCommands(message) {
     embeds: [
       baseEmbed(`${BRAND} Staff Commands`)
         .addFields(
-          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!botconfig`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!ccpanel`, `!ccconfig`"),
+          field("Setup/Admin", "`!krupdate`, `!newplayersetup`, `!start here`, `!starthere`, `!rolesetup`, `!botconfig`, `!commandconfigure`, `!logconfigure`, `!autorole`, `!automod`, `!badword`, `!reactionroles`, `!staffapp`, `!ticketpanel`, `!ccpanel`, `!ccconfig`, `!leaderboard configure`"),
           field("Config/Admin", "`!configview`, `!configreload`, `!configreset`, `!backup`, `!restorebackup`, `!analytics`"),
           field("Tickets", "`!claimticket`, `!addinticket @user`, `!removefromticket @user`, `!ccapprove @user`, `!ccdeny @user reason`, legacy aliases: `!add @user`, `!remove @user`"),
           field("Trial Mod", "`!log`, `!warn @user/id reason`, `!timeout @user/id 30m/2h/3d reason`, `!untimeout @user/id reason`, `!warnings @user/id`, `!cases @user/id`, `!case 12`, `!rules`"),
           field("Moderator+", "`!purge 25`, `!clear 25`, `!unwarn @user/id`, `!removecase @user/id case`, `!punish @user/id rule reason`, `!kick`"),
           field("Ban Members Permission", "`!ban`, `!unban`, `!tempban @user/id 30m/12h/14d reason`, `!untempban`"),
-          field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`")
+          field("Events/Stats", "`!event`, `!endevent`, `!gcreate`, `!staffstats`, `!serverstats`, `!leaderboard`, `!donation @user amount`, `!donationremove @user amount`")
         )
     ]
   });
@@ -3245,8 +3263,412 @@ async function handleRank(message) {
   await message.reply("The built-in level system is disabled because Noctaly is handling levels now.");
 }
 
-async function handleLeaderboard(message) {
-  await message.reply("The built-in leaderboard is disabled because Noctaly is handling levels now.");
+function parseDonationAmount(value = "") {
+  const normalized = String(value).replace(/[,_\s]/g, "");
+  if (!/^\d+$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
+}
+
+function getEligibleDonationTierThresholds(total) {
+  const safeTotal = Math.max(0, Number(total) || 0);
+  return DONATION_ROLE_TIERS.filter((tier) => safeTotal >= tier.amount).map((tier) => tier.amount);
+}
+
+function formatRobux(amount) {
+  return `${Math.max(0, Number(amount) || 0).toLocaleString("en-US")} Robux`;
+}
+
+function escapeLeaderboardText(value = "Unknown User") {
+  return String(value).replace(/([\\`*_~|>])/g, "\\$1").slice(0, 80);
+}
+
+function buildDonationLeaderboardEmbed(guild) {
+  const data = getGuildData(guild.id);
+  const settings = getGuildSettings(guild.id) || {};
+  const entries = Object.entries(data.donations || {})
+    .map(([userId, record]) => ({
+      userId,
+      total: Math.max(0, Number(record?.total ?? record) || 0),
+      userTag: record?.userTag || userId,
+      updatedAt: Number(record?.updatedAt) || 0
+    }))
+    .filter((entry) => entry.total > 0)
+    .sort((a, b) => b.total - a.total || a.updatedAt - b.updatedAt);
+
+  const leaders = entries.slice(0, 20).map((entry, index) => {
+    const member = guild.members.cache.get(entry.userId);
+    const cachedUser = client.users.cache.get(entry.userId);
+    const name = member?.displayName || cachedUser?.globalName || cachedUser?.username || entry.userTag;
+    return `**${index + 1}. ${escapeLeaderboardText(name)}** - ${formatRobux(entry.total)}`;
+  });
+
+  const configuredRoles = DONATION_ROLE_TIERS.flatMap((tier) => {
+    const role = guild.roles.cache.get(settings.donationTierRoleIds?.[tier.key]);
+    return role ? [`R$${tier.amount.toLocaleString("en-US")} - ${escapeLeaderboardText(role.name)}`] : [];
+  });
+
+  return baseEmbed("Kaiju Reincarnated Donation Leaderboard", "#f59e0b")
+    .setDescription(leaders.length ? leaders.join("\n") : "No donations have been recorded yet.")
+    .addFields(
+      field("Milestones", [
+        "R$50 / R$100 / R$200 / R$300 - No extra perk listed",
+        "R$550 - Access to Alpha KR",
+        "R$1,000 - Supporter role and private supporter leaks",
+        "R$1,500 - One free recolour gamepass",
+        "R$2,000 - No extra perk listed",
+        "R$3,500 - Super Fan role and 5,000 GCells on release",
+        "R$5,000 - One free skin",
+        "R$7,500 - Two free skins"
+      ].join("\n")),
+      field("Premium Milestones", [
+        "R$10,000 - Mega Fan: VIP gamepass, 2,000 GCells, another gamepass, and a free femboy skin",
+        "R$25,000 - Ultimate Fan: special credits, permanent early access, and unreleased kaiju access in private servers",
+        "R$35,000 - Ultra Plus Fan: three gamepasses, Ultra Plus Fan role, and a custom server role",
+        "R$50,000 - Supreme Fan: five gamepasses and the Supreme Fan role"
+      ].join("\n")),
+      field("Automatic Reward Roles", configuredRoles.length ? configuredRoles.join("\n") : "Not configured yet")
+    )
+    .setFooter({ text: `Showing ${Math.min(entries.length, 20)} of ${entries.length} donor(s). Reward roles are cumulative.` });
+}
+
+async function updateDonationLeaderboard(guild) {
+  const settings = getGuildSettings(guild.id) || {};
+  if (!settings.donationLeaderboardChannelId) {
+    return { ok: false, error: "No donation leaderboard channel is configured." };
+  }
+
+  const channel = guild.channels.cache.get(settings.donationLeaderboardChannelId)
+    || await guild.channels.fetch(settings.donationLeaderboardChannelId).catch(() => null);
+  if (!channel || !channel.isTextBased() || !channel.messages) {
+    return { ok: false, error: "The configured donation leaderboard channel no longer exists or is not a text channel." };
+  }
+
+  const permissions = channel.permissionsFor(guild.members.me);
+  if (!permissions?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) {
+    return { ok: false, error: "I need View Channel, Send Messages, and Embed Links in the donation leaderboard channel." };
+  }
+
+  let boardMessage = null;
+  if (settings.donationLeaderboardMessageId) {
+    boardMessage = await channel.messages.fetch(settings.donationLeaderboardMessageId).catch(() => null);
+    if (boardMessage?.author.id !== client.user.id) boardMessage = null;
+  }
+
+  const payload = {
+    embeds: [buildDonationLeaderboardEmbed(guild)],
+    allowedMentions: { parse: [] }
+  };
+
+  if (boardMessage) {
+    await boardMessage.edit(payload);
+    return { ok: true, created: false, channel, message: boardMessage };
+  }
+
+  boardMessage = await channel.send(payload);
+  saveGuildSettings(guild.id, { donationLeaderboardMessageId: boardMessage.id });
+  return { ok: true, created: true, channel, message: boardMessage };
+}
+
+async function syncDonationRoles(guild, userId, total, settings = getGuildSettings(guild.id) || {}) {
+  const result = { added: [], removed: [], errors: [], deferred: false };
+  const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+  if (!member) {
+    result.deferred = true;
+    return result;
+  }
+
+  const eligible = new Set(getEligibleDonationTierThresholds(total));
+  const seenRoleIds = new Set();
+
+  for (const tier of DONATION_ROLE_TIERS) {
+    const roleId = settings.donationTierRoleIds?.[tier.key];
+    if (!roleId || seenRoleIds.has(roleId)) continue;
+    seenRoleIds.add(roleId);
+
+    const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      result.errors.push(`${tier.label}: configured role was not found`);
+      continue;
+    }
+
+    const shouldHave = eligible.has(tier.amount);
+    const hasRole = member.roles.cache.has(role.id);
+    if (shouldHave === hasRole) continue;
+
+    if (shouldHave && isUnsafeAutoRole(role)) {
+      result.errors.push(`${role.name}: unsafe permissions prevent automatic assignment`);
+      continue;
+    }
+
+    const roleError = getRoleManageError(guild, role);
+    if (roleError) {
+      result.errors.push(`${role.name}: ${roleError}`);
+      continue;
+    }
+
+    try {
+      if (shouldHave) {
+        await member.roles.add(role, `Donation total reached ${formatRobux(tier.amount)}`);
+        result.added.push(role.name);
+      } else {
+        await member.roles.remove(role, `Donation total fell below ${formatRobux(tier.amount)}`);
+        result.removed.push(role.name);
+      }
+    } catch (error) {
+      result.errors.push(`${role.name}: ${error.message}`);
+    }
+  }
+
+  return result;
+}
+
+async function syncAllDonationRoles(guild, settings = getGuildSettings(guild.id) || {}) {
+  const data = getGuildData(guild.id);
+  const summary = { donors: 0, added: 0, removed: 0, errors: [] };
+
+  for (const [userId, record] of Object.entries(data.donations || {})) {
+    const total = Number(record?.total ?? record) || 0;
+    if (total <= 0) continue;
+    const result = await syncDonationRoles(guild, userId, total, settings);
+    summary.donors += 1;
+    summary.added += result.added.length;
+    summary.removed += result.removed.length;
+    summary.errors.push(...result.errors);
+  }
+
+  return summary;
+}
+
+async function removeObsoleteDonationRoles(guild, oldSettings, nextSettings) {
+  const oldRoleIds = new Set(Object.values(oldSettings.donationTierRoleIds || {}).filter(Boolean));
+  const nextRoleIds = new Set(Object.values(nextSettings.donationTierRoleIds || {}).filter(Boolean));
+  const obsoleteRoleIds = [...oldRoleIds].filter((roleId) => !nextRoleIds.has(roleId));
+  const result = { removed: 0, errors: [] };
+  if (!obsoleteRoleIds.length) return result;
+
+  const donorIds = Object.keys(getGuildData(guild.id).donations || {});
+  for (const userId of donorIds) {
+    const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+    if (!member) continue;
+
+    for (const roleId of obsoleteRoleIds) {
+      if (!member.roles.cache.has(roleId)) continue;
+      const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+      if (!role) continue;
+      const roleError = getRoleManageError(guild, role);
+      if (roleError) {
+        result.errors.push(`${role.name}: ${roleError}`);
+        continue;
+      }
+
+      await member.roles.remove(role, "Donation reward role configuration changed")
+        .then(() => { result.removed += 1; })
+        .catch((error) => result.errors.push(`${role.name}: ${error.message}`));
+    }
+  }
+
+  return result;
+}
+
+async function collectDonationConfigReply(message, question) {
+  await message.channel.send(question);
+  const reply = await collectOneMessage(message.channel, message.author.id, QUESTION_TIMEOUT);
+  if (!reply) await message.channel.send("Donation leaderboard configuration timed out. Run `!leaderboard configure` to start again.");
+  return reply;
+}
+
+async function handleDonationLeaderboardConfigure(message) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can configure the donation leaderboard.");
+
+  const sessionKey = `${message.guild.id}:${message.author.id}`;
+  if (activeDonationConfigurations.has(sessionKey)) return message.reply("You already have a donation leaderboard configuration in progress.");
+  activeDonationConfigurations.add(sessionKey);
+
+  try {
+    const channelReply = await collectDonationConfigReply(
+      message,
+      "Mention the text channel for the automatically updated donation leaderboard, or type `here` to use this channel."
+    );
+    if (!channelReply) return null;
+
+    const channel = channelReply.content.trim().toLowerCase() === "here"
+      ? message.channel
+      : channelReply.mentions.channels.first() || message.guild.channels.cache.get(cleanChannelId(channelReply.content));
+    if (!channel || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) {
+      return message.reply("That was not a valid server text channel. Run `!leaderboard configure` again.");
+    }
+
+    const channelPermissions = channel.permissionsFor(message.guild.members.me);
+    if (!channelPermissions?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) {
+      return message.reply("I need View Channel, Send Messages, and Embed Links in that channel before it can hold the leaderboard.");
+    }
+
+    const tierRoleIds = {};
+    const selectedRoleIds = new Set();
+    for (const tier of DONATION_ROLE_TIERS) {
+      const reply = await collectDonationConfigReply(
+        message,
+        `Mention the **${tier.label}** role for the **${formatRobux(tier.amount)}** tier, or type \`none\` to skip it. Perk: ${tier.perk}.`
+      );
+      if (!reply) return null;
+      if (["none", "skip"].includes(reply.content.trim().toLowerCase())) continue;
+
+      const role = reply.mentions.roles.first() || message.guild.roles.cache.get(cleanRoleId(reply.content));
+      if (!role || role.id === message.guild.roles.everyone.id) {
+        return message.reply(`That was not a valid role for ${tier.label}. Run \`!leaderboard configure\` again.`);
+      }
+      if (selectedRoleIds.has(role.id)) {
+        return message.reply(`The ${role.name} role was already selected for another donation tier. Each tier needs a different role.`);
+      }
+      if (isUnsafeAutoRole(role)) {
+        return message.reply(`I will not automatically assign ${role.name} because it has admin, moderation, management, or mass-ping permissions.`);
+      }
+      const roleError = getRoleManageError(message.guild, role);
+      if (roleError) return message.reply(`${role.name}: ${roleError}`);
+
+      selectedRoleIds.add(role.id);
+      tierRoleIds[tier.key] = role.id;
+    }
+
+    const oldSettings = getGuildSettings(message.guild.id) || {};
+    if (oldSettings.donationLeaderboardChannelId && oldSettings.donationLeaderboardChannelId !== channel.id && oldSettings.donationLeaderboardMessageId) {
+      const oldChannel = message.guild.channels.cache.get(oldSettings.donationLeaderboardChannelId)
+        || await message.guild.channels.fetch(oldSettings.donationLeaderboardChannelId).catch(() => null);
+      const oldBoard = oldChannel?.isTextBased()
+        ? await oldChannel.messages.fetch(oldSettings.donationLeaderboardMessageId).catch(() => null)
+        : null;
+      if (oldBoard?.author.id === client.user.id) await oldBoard.delete().catch(() => {});
+    }
+
+    const nextSettings = saveGuildSettings(message.guild.id, {
+      ...oldSettings,
+      donationLeaderboardChannelId: channel.id,
+      donationLeaderboardMessageId: oldSettings.donationLeaderboardChannelId === channel.id
+        ? oldSettings.donationLeaderboardMessageId || null
+        : null,
+      donationTierRoleIds: tierRoleIds
+    });
+
+    const obsoleteRoleSync = await removeObsoleteDonationRoles(message.guild, oldSettings, nextSettings);
+    const roleSync = await syncAllDonationRoles(message.guild, nextSettings);
+    roleSync.removed += obsoleteRoleSync.removed;
+    roleSync.errors.push(...obsoleteRoleSync.errors);
+    const leaderboard = await updateDonationLeaderboard(message.guild).catch((error) => ({ ok: false, error: error.message }));
+    const roleList = DONATION_ROLE_TIERS.flatMap((tier) => {
+      const role = message.guild.roles.cache.get(tierRoleIds[tier.key]);
+      return role ? [`${formatRobux(tier.amount)}: ${role.name}`] : [];
+    });
+
+    return message.reply({
+      embeds: [
+        baseEmbed("Donation Leaderboard Configured", "#f59e0b")
+          .addFields(
+            field("Leaderboard Channel", channel.name),
+            field("Automatic Roles", roleList.length ? roleList.join("\n") : "No automatic roles configured"),
+            field("Existing Donors Synced", `${roleSync.donors} checked; ${roleSync.added} role(s) added; ${roleSync.removed} role(s) removed`),
+            field("Leaderboard", leaderboard.ok ? `Ready in ${channel.name}` : leaderboard.error),
+            field("Errors", roleSync.errors.length ? roleSync.errors.slice(0, 10).join("\n") : "None")
+          )
+          .setFooter({ text: "Reward roles are cumulative and update whenever a donation changes." })
+      ],
+      allowedMentions: { parse: [], repliedUser: false }
+    });
+  } finally {
+    activeDonationConfigurations.delete(sessionKey);
+  }
+}
+
+async function handleLeaderboard(message, args = []) {
+  if (["configure", "config", "setup"].includes((args[0] || "").toLowerCase())) {
+    return handleDonationLeaderboardConfigure(message);
+  }
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  if (settings.donationLeaderboardChannelId) {
+    const updated = await updateDonationLeaderboard(message.guild).catch((error) => ({ ok: false, error: error.message }));
+    if (message.channel.id === settings.donationLeaderboardChannelId && updated.ok) {
+      return replyWithoutMentions(message, `Donation leaderboard updated: ${updated.message.url}`);
+    }
+  }
+
+  await message.reply({
+    embeds: [buildDonationLeaderboardEmbed(message.guild)],
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+}
+
+async function changeDonation(message, args, direction) {
+  if (!isAdmin(message.member)) return message.reply("Only admins can add or remove recorded donations.");
+
+  const user = await resolveUserArgument(message, args[0]);
+  const amount = parseDonationAmount(args.slice(1).join(""));
+  const commandName = direction > 0 ? "donation" : "donationremove";
+  if (!user || !amount) return message.reply(`Usage: \`!${commandName} @user donationAmount\`. Example: \`!${commandName} @user 1,000\`.`);
+
+  const data = getGuildData(message.guild.id);
+  data.donations ||= {};
+  const currentRecord = data.donations[user.id];
+  const oldTotal = Math.max(0, Number(currentRecord?.total ?? currentRecord) || 0);
+  if (direction < 0 && oldTotal <= 0) return message.reply(`${user.tag} has no recorded donations to remove.`);
+
+  const newTotal = direction > 0 ? oldTotal + amount : Math.max(0, oldTotal - amount);
+  const changedAmount = Math.abs(newTotal - oldTotal);
+  if (newTotal > 0) {
+    data.donations[user.id] = { total: newTotal, userTag: user.tag, updatedAt: Date.now() };
+  } else {
+    delete data.donations[user.id];
+  }
+  saveGuildData(message.guild.id, data);
+
+  const settings = getGuildSettings(message.guild.id) || {};
+  const roleSync = await syncDonationRoles(message.guild, user.id, newTotal, settings);
+  const leaderboard = await updateDonationLeaderboard(message.guild).catch((error) => ({ ok: false, error: error.message }));
+  const action = direction > 0 ? "Added" : "Removed";
+  const roleChanges = [
+    roleSync.added.length ? `Added: ${roleSync.added.join(", ")}` : null,
+    roleSync.removed.length ? `Removed: ${roleSync.removed.join(", ")}` : null,
+    roleSync.deferred ? "Role sync deferred until the donor rejoins the server." : null,
+    roleSync.errors.length ? `Errors: ${roleSync.errors.join("; ")}` : null
+  ].filter(Boolean).join("\n") || "No role changes";
+
+  await logTo(message.guild, "logs", `Donation ${action}`, [
+    field("Donor", `${user.tag} (${user.id})`),
+    field("Amount", formatRobux(changedAmount), true),
+    field("New Total", formatRobux(newTotal), true),
+    field("Updated By", `${message.author.tag} (${message.author.id})`),
+    field("Reward Roles", roleChanges)
+  ]);
+
+  await message.reply({
+    embeds: [
+      baseEmbed(`Donation ${action}`, direction > 0 ? "#22c55e" : "#ef4444")
+        .addFields(
+          field("Donor", `${user.tag} (${user.id})`),
+          field("Change", `${direction > 0 ? "+" : "-"}${formatRobux(changedAmount)}`, true),
+          field("New Total", formatRobux(newTotal), true),
+          field("Reward Roles", roleChanges),
+          field("Leaderboard", leaderboard.ok ? `Updated in ${leaderboard.channel.name}` : `${leaderboard.error} Run \`!leaderboard configure\`.`)
+        )
+    ],
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+}
+
+async function handleDonation(message, args) {
+  return changeDonation(message, args, 1);
+}
+
+async function handleDonationRemove(message, args) {
+  return changeDonation(message, args, -1);
+}
+
+async function refreshDonationLeaderboards() {
+  for (const guild of client.guilds.cache.values()) {
+    const settings = getGuildSettings(guild.id) || {};
+    if (!settings.donationLeaderboardChannelId) continue;
+    await updateDonationLeaderboard(guild).catch((error) => console.error(`Donation leaderboard refresh failed for ${guild.id}:`, error));
+  }
 }
 
 async function handleAnalytics(message) {
@@ -4549,6 +4971,8 @@ if (require.main === module) {
 module.exports = {
   BAN_APPEAL_INVITE,
   cleanUserId,
+  getEligibleDonationTierThresholds,
+  parseDonationAmount,
   parseTempBanDuration,
   parseTimeoutDuration
 };

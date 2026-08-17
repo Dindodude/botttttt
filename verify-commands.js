@@ -49,6 +49,13 @@ for (const customId of requiredButtons) {
   if (!interactionRouter.includes(`"${customId}"`)) failures.push(`Missing button route: ${customId}`);
 }
 
+for (const command of ["leaderboard", "donation", "donationremove"]) {
+  if (!routedCommands.has(command)) failures.push(`Missing donation-system command route: ${command}`);
+}
+if (!source.includes("donationLeaderboardChannelId") || !source.includes("donationTierRoleIds")) {
+  failures.push("Donation leaderboard persistent configuration is missing.");
+}
+
 if (!source.includes("https://discord.gg/WQ4U3ARjue")) failures.push("Ban appeal invite is not current.");
 if (source.includes("https://discord.gg/Zv7uGG3SYj")) failures.push("Old ban appeal invite is still present.");
 

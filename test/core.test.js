@@ -4,6 +4,8 @@ const assert = require("node:assert/strict");
 const {
   BAN_APPEAL_INVITE,
   cleanUserId,
+  getEligibleDonationTierThresholds,
+  parseDonationAmount,
   parseTempBanDuration,
   parseTimeoutDuration
 } = require("../index");
@@ -35,6 +37,22 @@ test("user IDs are safely extracted from IDs and mentions", () => {
   assert.equal(cleanUserId("not-a-user"), null);
 });
 
+test("donation amounts accept whole Robux values with common separators", () => {
+  assert.equal(parseDonationAmount("1000"), 1000);
+  assert.equal(parseDonationAmount("1,500"), 1500);
+  assert.equal(parseDonationAmount("25_000"), 25000);
+  assert.equal(parseDonationAmount("1.5"), null);
+  assert.equal(parseDonationAmount("-100"), null);
+  assert.equal(parseDonationAmount("0"), null);
+});
+
+test("donation reward tiers are cumulative at exact thresholds", () => {
+  assert.deepEqual(getEligibleDonationTierThresholds(549), []);
+  assert.deepEqual(getEligibleDonationTierThresholds(1000), [550, 1000]);
+  assert.deepEqual(getEligibleDonationTierThresholds(9999), [550, 1000, 3500]);
+  assert.deepEqual(getEligibleDonationTierThresholds(50000), [550, 1000, 3500, 10000, 25000, 35000, 50000]);
+});
+
 test("legacy guild data gains required structures without losing records", () => {
   const legacy = {
     cases: [{ id: 9, reason: "kept" }],
@@ -50,5 +68,19 @@ test("legacy guild data gains required structures without losing records", () =>
   assert.equal(normalized.analytics.messages, 0);
   assert.deepEqual(normalized.ticketMeta, {});
   assert.deepEqual(normalized.tempBans, {});
+  assert.deepEqual(normalized.donations, {});
   assert.equal(normalized.nextCaseId, 10);
+});
+
+test("legacy donation totals are normalized without losing donor data", () => {
+  const normalized = normalizeGuildData({
+    donations: {
+      "111111111111111111": 550,
+      "222222222222222222": { total: "1,500", userTag: "DonorTwo", updatedAt: 123 }
+    }
+  });
+
+  assert.equal(normalized.donations["111111111111111111"].total, 550);
+  assert.equal(normalized.donations["222222222222222222"].total, 1500);
+  assert.equal(normalized.donations["222222222222222222"].userTag, "DonorTwo");
 });

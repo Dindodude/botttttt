@@ -55,6 +55,7 @@ function createGuildData() {
     cases: [],
     nextCaseId: 1,
     xp: {},
+    donations: {},
     tickets: {},
     ticketMeta: {},
     suggestions: [],
@@ -90,6 +91,7 @@ function normalizeGuildData(value) {
   for (const key of [
     "warnings",
     "xp",
+    "donations",
     "tickets",
     "ticketMeta",
     "events",
@@ -110,6 +112,19 @@ function normalizeGuildData(value) {
   normalized.cases = arrayOr(source.cases);
   normalized.suggestions = arrayOr(source.suggestions);
   normalized.reviews = arrayOr(source.reviews);
+  normalized.donations = Object.fromEntries(
+    Object.entries(objectOr(source.donations)).flatMap(([userId, record]) => {
+      const sourceRecord = objectOr(record, { total: record });
+      const totalValue = String(sourceRecord.total ?? "").replace(/[,_\s]/g, "");
+      const total = Math.max(0, Math.floor(Number(totalValue) || 0));
+      if (!total) return [];
+      return [[userId, {
+        total,
+        userTag: String(sourceRecord.userTag || userId),
+        updatedAt: Number(sourceRecord.updatedAt) || Date.now()
+      }]];
+    })
+  );
   normalized.nextCaseId = Number.isSafeInteger(source.nextCaseId) && source.nextCaseId > 0
     ? source.nextCaseId
     : Math.max(0, ...normalized.cases.map((entry) => Number(entry?.id) || 0)) + 1;

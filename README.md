@@ -131,12 +131,22 @@ This creates/checks:
 - `!ccconfig reviewers @role` - set which roles can use `!ccapprove` and `!ccdeny`
 - `!ccconfig ticketroles @role` - set which roles can see and manage private CC tickets
 - `!bugreport` - guided bug report
-- `!rank`, `!leaderboard`, `!level` - explains that Noctaly handles levels
+- `!rank`, `!level` - explains that Noctaly handles levels
+- `!leaderboard` - show the Robux donation leaderboard and reward milestones
+- `!leaderboard configure` - admin guided setup for the leaderboard channel and automatic reward roles
+- `!donation @user amount` - admin command to add to a donor's persistent total
+- `!donationremove @user amount` - admin command to subtract from a donor's persistent total
 - `!event`, `!endevent` - staff event posts
 - `!warn`, `!warnings`, `!kick`, `!ban`, `!tempban`, `!untempban`, `!timeout` - moderation
 - `!ccapprove @user`, `!ccdeny @user reason` - review Content Creator applications
 - `!analytics`, `!serverstats` - stats
 - `!backup`, `!restorebackup`, `!configview`, `!configreload`, `!configreset` - config tools
+
+### Donation leaderboard setup
+
+Run `!leaderboard configure`, mention the channel that should hold the live leaderboard, and then mention each requested reward role or type `none`. Donations and configuration are stored per server. Reward roles are cumulative and are added or removed automatically whenever a donor's total changes.
+
+Amounts can be entered as `1000`, `1,000`, or `25_000`. The bot role needs **Manage Roles** and must be above every configured donation reward role.
 
 Temporary ban examples:
 
