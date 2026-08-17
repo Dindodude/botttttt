@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-08-16-donation-leaderboard";
+const BOT_VERSION = "2026-08-16-donation-leaderboard-only";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const BAN_APPEAL_INVITE = "https://discord.gg/WQ4U3ARjue";
@@ -1847,7 +1847,7 @@ async function handleCommands(message) {
           field("General", "`!ping`, `!version`, `!commands`, `!help`, `!rules`, `!serverstats`"),
           field("Community", "`!review`, `!suggest [idea]`, `!bugreport`"),
           field("Levels", "`!rank` and `!level` are disabled because Noctaly handles levels."),
-          field("Donations", "`!leaderboard` shows the Robux donation leaderboard and reward milestones."),
+          field("Donations", "`!leaderboard` shows the Robux donation leaderboard."),
           field("Support", "Use the ticket panel in #tickets when you need private help."),
           field("Notes", "Staff commands are hidden from players. Staff can use `!staffcommands`.")
         )
@@ -3285,7 +3285,6 @@ function escapeLeaderboardText(value = "Unknown User") {
 
 function buildDonationLeaderboardEmbed(guild) {
   const data = getGuildData(guild.id);
-  const settings = getGuildSettings(guild.id) || {};
   const entries = Object.entries(data.donations || {})
     .map(([userId, record]) => ({
       userId,
@@ -3303,33 +3302,10 @@ function buildDonationLeaderboardEmbed(guild) {
     return `**${index + 1}. ${escapeLeaderboardText(name)}** - ${formatRobux(entry.total)}`;
   });
 
-  const configuredRoles = DONATION_ROLE_TIERS.flatMap((tier) => {
-    const role = guild.roles.cache.get(settings.donationTierRoleIds?.[tier.key]);
-    return role ? [`R$${tier.amount.toLocaleString("en-US")} - ${escapeLeaderboardText(role.name)}`] : [];
-  });
-
+  const totalDonated = entries.reduce((sum, entry) => sum + entry.total, 0);
   return baseEmbed("Kaiju Reincarnated Donation Leaderboard", "#f59e0b")
     .setDescription(leaders.length ? leaders.join("\n") : "No donations have been recorded yet.")
-    .addFields(
-      field("Milestones", [
-        "R$50 / R$100 / R$200 / R$300 - No extra perk listed",
-        "R$550 - Access to Alpha KR",
-        "R$1,000 - Supporter role and private supporter leaks",
-        "R$1,500 - One free recolour gamepass",
-        "R$2,000 - No extra perk listed",
-        "R$3,500 - Super Fan role and 5,000 GCells on release",
-        "R$5,000 - One free skin",
-        "R$7,500 - Two free skins"
-      ].join("\n")),
-      field("Premium Milestones", [
-        "R$10,000 - Mega Fan: VIP gamepass, 2,000 GCells, another gamepass, and a free femboy skin",
-        "R$25,000 - Ultimate Fan: special credits, permanent early access, and unreleased kaiju access in private servers",
-        "R$35,000 - Ultra Plus Fan: three gamepasses, Ultra Plus Fan role, and a custom server role",
-        "R$50,000 - Supreme Fan: five gamepasses and the Supreme Fan role"
-      ].join("\n")),
-      field("Automatic Reward Roles", configuredRoles.length ? configuredRoles.join("\n") : "Not configured yet")
-    )
-    .setFooter({ text: `Showing ${Math.min(entries.length, 20)} of ${entries.length} donor(s). Reward roles are cumulative.` });
+    .setFooter({ text: `${entries.length} donor(s) | ${formatRobux(totalDonated)} total` });
 }
 
 async function updateDonationLeaderboard(guild) {

@@ -132,7 +132,7 @@ This creates/checks:
 - `!ccconfig ticketroles @role` - set which roles can see and manage private CC tickets
 - `!bugreport` - guided bug report
 - `!rank`, `!level` - explains that Noctaly handles levels
-- `!leaderboard` - show the Robux donation leaderboard and reward milestones
+- `!leaderboard` - show the Robux donation leaderboard
 - `!leaderboard configure` - admin guided setup for the leaderboard channel and automatic reward roles
 - `!donation @user amount` - admin command to add to a donor's persistent total
 - `!donationremove @user amount` - admin command to subtract from a donor's persistent total

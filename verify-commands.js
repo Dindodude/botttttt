@@ -55,6 +55,10 @@ for (const command of ["leaderboard", "donation", "donationremove"]) {
 if (!source.includes("donationLeaderboardChannelId") || !source.includes("donationTierRoleIds")) {
   failures.push("Donation leaderboard persistent configuration is missing.");
 }
+const donationEmbedSection = source.match(/function buildDonationLeaderboardEmbed[\s\S]*?async function updateDonationLeaderboard/)?.[0] || "";
+if (/Milestones|Automatic Reward Roles|Premium Milestones/.test(donationEmbedSection)) {
+  failures.push("The public donation leaderboard contains non-leaderboard milestone or role details.");
+}
 
 if (!source.includes("https://discord.gg/WQ4U3ARjue")) failures.push("Ban appeal invite is not current.");
 if (source.includes("https://discord.gg/Zv7uGG3SYj")) failures.push("Old ban appeal invite is still present.");
