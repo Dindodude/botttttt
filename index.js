@@ -30,7 +30,7 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const PREFIX = process.env.PREFIX || "!";
 const BRAND = "Kaiju Reincarnated";
-const BOT_VERSION = "2026-08-16-donation-leaderboard-only";
+const BOT_VERSION = "2026-08-16-donation-display-mentions";
 const COLOR = "#16a34a";
 const ERROR_COLOR = "#ef4444";
 const BAN_APPEAL_INVITE = "https://discord.gg/WQ4U3ARjue";
@@ -3279,28 +3279,20 @@ function formatRobux(amount) {
   return `${Math.max(0, Number(amount) || 0).toLocaleString("en-US")} Robux`;
 }
 
-function escapeLeaderboardText(value = "Unknown User") {
-  return String(value).replace(/([\\`*_~|>])/g, "\\$1").slice(0, 80);
-}
-
 function buildDonationLeaderboardEmbed(guild) {
   const data = getGuildData(guild.id);
   const entries = Object.entries(data.donations || {})
     .map(([userId, record]) => ({
       userId,
       total: Math.max(0, Number(record?.total ?? record) || 0),
-      userTag: record?.userTag || userId,
       updatedAt: Number(record?.updatedAt) || 0
     }))
     .filter((entry) => entry.total > 0)
     .sort((a, b) => b.total - a.total || a.updatedAt - b.updatedAt);
 
-  const leaders = entries.slice(0, 20).map((entry, index) => {
-    const member = guild.members.cache.get(entry.userId);
-    const cachedUser = client.users.cache.get(entry.userId);
-    const name = member?.displayName || cachedUser?.globalName || cachedUser?.username || entry.userTag;
-    return `**${index + 1}. ${escapeLeaderboardText(name)}** - ${formatRobux(entry.total)}`;
-  });
+  const leaders = entries.slice(0, 20).map((entry, index) =>
+    `**${index + 1}.** <@${entry.userId}> - **${formatRobux(entry.total)}**`
+  );
 
   const totalDonated = entries.reduce((sum, entry) => sum + entry.total, 0);
   return baseEmbed("Kaiju Reincarnated Donation Leaderboard", "#f59e0b")

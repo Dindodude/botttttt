@@ -59,6 +59,9 @@ const donationEmbedSection = source.match(/function buildDonationLeaderboardEmbe
 if (/Milestones|Automatic Reward Roles|Premium Milestones/.test(donationEmbedSection)) {
   failures.push("The public donation leaderboard contains non-leaderboard milestone or role details.");
 }
+if (!donationEmbedSection.includes("<@${entry.userId}>")) {
+  failures.push("Donation leaderboard entries do not use Discord display-name mentions.");
+}
 
 if (!source.includes("https://discord.gg/WQ4U3ARjue")) failures.push("Ban appeal invite is not current.");
 if (source.includes("https://discord.gg/Zv7uGG3SYj")) failures.push("Old ban appeal invite is still present.");
